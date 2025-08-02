@@ -130,6 +130,21 @@ pub fn build(b: *std.Build) void {
     z2d.addOptions("z2d_options", z2d_options);
 
     /////////////////////////////////////////////////////////////////////////
+    // Dependencies for WebGpu
+    /////////////////////////////////////////////////////////////////////////
+    const libtess_mod = b.dependency("libtess", .{
+        .optimize = optimize,
+        .target = target,
+    }).module("libtess");
+    const wgpu_mod = b.dependency("wgpu_native_zig", .{
+        .target = target,
+        .optimize = optimize,
+        // .link_mode = .dynamic,
+    }).module("wgpu");
+    z2d.addImport("libtess", libtess_mod);
+    z2d.addImport("wgpu", wgpu_mod);
+
+    /////////////////////////////////////////////////////////////////////////
     // Unit tests
     /////////////////////////////////////////////////////////////////////////
     const test_filters = b.option(

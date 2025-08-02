@@ -100,6 +100,7 @@ pub const options = @import("options.zig");
 pub const png_exporter = @import("export_png.zig");
 
 pub const Context = @import("Context.zig");
+pub const ContextWgpu = @import("wgpu_Context.zig");
 pub const Path = @import("Path.zig");
 pub const StaticPath = @import("static_path.zig").StaticPath;
 pub const Pattern = pattern.Pattern;

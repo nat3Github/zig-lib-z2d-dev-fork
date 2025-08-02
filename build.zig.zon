@@ -10,4 +10,12 @@
         "build.zig.zon",
         "src",
     },
+    .dependencies = .{
+        .wgpu_native_zig = .{
+            .path = "../wgpu-native",
+        },
+        .libtess = .{
+            .path = "../libtess",
+        },
+    },
 }

@@ -32,7 +32,7 @@ const testing = @import("std").testing;
 const arcpkg = @import("internal/arc.zig");
 const options = @import("options.zig");
 
-const PathNode = @import("internal/path_nodes.zig").PathNode;
+pub const PathNode = @import("internal/path_nodes.zig").PathNode;
 const PathVTable = @import("internal/PathVTable.zig");
 const Point = @import("internal/Point.zig");
 const Transformation = @import("Transformation.zig");
