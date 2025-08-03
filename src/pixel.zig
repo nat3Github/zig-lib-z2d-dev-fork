@@ -77,7 +77,7 @@ pub const Stride = union(Format) {
     /// expected to be greater than or equal to `src`.
     pub fn copy(dst: Stride, src: Stride) void {
         switch (dst) {
-            inline .rgb, .rgba, .alpha8 => |d| @typeInfo(@TypeOf(d)).Pointer.child.copySrcStride(d, src),
+            inline .rgb, .rgba, .alpha8 => |d| @typeInfo(@TypeOf(d)).pointer.child.copySrcStride(d, src),
             inline .alpha4, .alpha2, .alpha1 => |d| @TypeOf(d).T.copyStride(d, src),
         }
     }

@@ -310,7 +310,6 @@ const WgpuJoiner = struct {
     }
 };
 
-
 pub fn plotSingle(T: type, self: *T, start: Point, end: Point) Error!void {
     debug.assert(self.current_inner_segment_points.items.len == 0); // Inner should be empty for a single segment
 
@@ -470,8 +469,8 @@ pub fn plotClosedJoined(
     self: *T,
     initial0: Point, // Logical start point of the path
     initial1: Point, // Point after initial0
-    p1: Point,       // Second to last point in path buffer
-    p2: Point,       // Last point in path buffer
+    p1: Point, // Second to last point in path buffer
+    p2: Point, // Last point in path buffer
 ) Error!void {
     // A closed path should result in two separate contours for tessellation:
     // one for the outer boundary, and one for the inner boundary.

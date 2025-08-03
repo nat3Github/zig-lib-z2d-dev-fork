@@ -33,6 +33,7 @@ const Transformation = z2d.Transformation;
 alloc: mem.Allocator,
 path: Path,
 surface: *Surface,
+gpu_painter: painter.Painter,
 pattern: Pattern = .{
     .opaque_pattern = .{
         .pixel = .{ .rgba = .{ .r = 0x00, .g = 0x00, .b = 0x00, .a = 0xFF } },
@@ -62,18 +63,24 @@ transformation: Transformation = Transformation.identity,
 /// Initializes a `Context` with the passed in allocator and surface. Call
 /// `deinit` to release any resources managed solely by the context, such as
 /// the managed `Path`.
-pub fn init(alloc: mem.Allocator, surface: *Surface) Context {
+pub fn init(alloc: mem.Allocator, surface: *Surface) !Context {
     return .{
         .alloc = alloc,
         .surface = surface,
         .path = .{},
+        .gpu_painter = try painter.Painter.init(alloc),
     };
+}
+
+pub fn finalize(self: *Context) !void {
+    try self.gpu_painter.finalize(self.surface);
 }
 
 /// Releases all resources associated with this particular context, such as the
 /// managed `Path`.
 pub fn deinit(self: *Context) void {
     self.path.deinit(self.alloc);
+    self.gpu_painter.deinit();
     self.path = undefined;
 }
 
@@ -540,11 +547,9 @@ pub fn isPathClosed(self: *Context) bool {
 
 /// Runs a fill operation for the current path and any subpaths. All paths in
 /// the set must be closed. This is a no-op if there are no nodes.
-pub fn fill(self: *Context) painter.FillError!void {
+pub fn fill(self: *Context) !void {
     const wrapped_pattern = self.wrapDither();
-    try painter.fill(
-        self.alloc,
-        self.surface,
+    try self.gpu_painter.fill(
         &wrapped_pattern,
         self.path.nodes.items,
         .{
@@ -569,9 +574,7 @@ pub fn fill(self: *Context) painter.FillError!void {
 /// This is a no-op if there are no nodes.
 pub fn stroke(self: *Context) painter.StrokeError!void {
     const wrapped_pattern = self.wrapDither();
-    try painter.stroke(
-        self.alloc,
-        self.surface,
+    try self.gpu_painter.stroke(
         &wrapped_pattern,
         self.path.nodes.items,
         .{
