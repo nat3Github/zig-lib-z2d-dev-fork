@@ -65,6 +65,7 @@ pub const Painter = struct {
         const triangle_count = libtess.tessGetElementCount(tess);
         const vertices_pointer: [*]const PointF32 = @ptrCast(libtess.tessGetVertices(tess));
         var vertices: []const PointF32 = undefined;
+        const idx_offset: u32 = @intCast(self.batch_vertices.current_len());
         vertices.ptr = vertices_pointer;
         vertices.len = @intCast(libtess.tessGetVertexCount(tess));
         for (vertices) |v| {
@@ -74,13 +75,13 @@ pub const Painter = struct {
         }
         try self.batch_vertices.finalize();
         var index_slices: []const c_int = undefined;
-        index_slices.ptr = libtess.tessGetVertexIndices(tess);
+        index_slices.ptr = libtess.tessGetElements(tess);
         index_slices.len = @intCast(triangle_count * 3);
         for (index_slices) |idx| {
-            try self.batch_indexes.append(@intCast(idx));
+            const idx_u32: u32 = @intCast(idx);
+            try self.batch_indexes.append(idx_u32 + idx_offset);
         }
         try self.batch_indexes.finalize();
-        std.log.warn("produced {} triangles", .{triangle_count});
     }
 
     pub fn fill(
@@ -120,7 +121,7 @@ pub const Painter = struct {
         _ = try opts.transformation.inverse();
         if (nodes.len == 0) return;
         const minimum_line_width: f64 = 0.00390625;
-        const alloc = self.arena.allocator();
+        var alloc = self.arena.allocator();
         defer _ = self.arena.reset(.retain_capacity);
         const cap_mode: options.CapMode = if (opts.line_width >= 2) opts.line_cap_mode else .butt;
         const ctm: Transformation = opts.transformation;
@@ -150,15 +151,12 @@ pub const Painter = struct {
         for (polygons.range.items) |range| {
             const slice = points[range.start..range.end];
             const ptr: *anyopaque = @alignCast(@ptrCast(slice.ptr));
-            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), points.len);
+            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), @intCast(points.len));
         }
-        const tess_winding = switch (opts.fill_rule) {
-            .even_odd => libtess.TESS_WINDING_ODD,
-            .non_zero => libtess.TESS_WINDING_NONZERO,
-        };
+        const tess_winding = libtess.TESS_WINDING_NONZERO;
         const res = libtess.tessTesselate(tess, tess_winding, libtess.TESS_POLYGONS, 3, 2, null);
         if (res != 1) return error.TesselateFailed;
-        self.add_tesselated_triangles_to_batch(tess, pattern);
+        try self.add_tesselated_triangles_to_batch(tess, pattern);
     }
 };
 
@@ -332,13 +330,16 @@ pub const WgpuRender = struct {
                 .blend = &wgpu.BlendState{
                     .color = wgpu.BlendComponent{
                         .operation = .add,
-                        .src_factor = .src_alpha,
+                        .src_factor = .src_alpha, // Use source alpha for color
                         .dst_factor = .one_minus_src_alpha,
                     },
                     .alpha = wgpu.BlendComponent{
                         .operation = .add,
-                        .src_factor = .zero,
-                        .dst_factor = .one,
+                        .src_factor = .one, // Take the source alpha directly
+                        .dst_factor = .one_minus_src_alpha, // Mix with destination alpha
+                        // OR, if you just want source alpha to overwrite destination:
+                        // .src_factor = .one,
+                        // .dst_factor = .zero, // This would make final_alpha = source_alpha
                     },
                 },
             },
@@ -403,7 +404,9 @@ pub const WgpuRender = struct {
             .height = @intCast(sfc.getHeight()),
             .depth_or_array_layers = 1,
         };
-        const output_bytes_per_row = 4 * output_extent.width;
+        const alignment: u32 = 256;
+        const unaligned_bytes_per_row = 4 * output_extent.width;
+        const output_bytes_per_row = (unaligned_bytes_per_row + alignment - 1) & ~(alignment - 1);
         const output_size = output_bytes_per_row * output_extent.height;
 
         const target_texture = self.device.createTexture(&wgpu.TextureDescriptor{
@@ -437,7 +440,7 @@ pub const WgpuRender = struct {
 
         const color_attachments = &[_]wgpu.ColorAttachment{wgpu.ColorAttachment{
             .view = target_texture_view,
-            .clear_value = wgpu.Color{},
+            .clear_value = wgpu.Color{ .r = 1, .g = 0, .b = 1, .a = 0 },
             .load_op = wgpu.LoadOp.clear, // Clear the texture at the start of the pass
             .store_op = wgpu.StoreOp.store,
         }};
@@ -462,6 +465,12 @@ pub const WgpuRender = struct {
             // Set the index buffer and draw for the current layer
             render_pass.setIndexBuffer(index_buffer, wgpu.IndexFormat.uint32, 0, index_data_bytes.len);
             render_pass.drawIndexed(@intCast(triangle_index_list.len), 1, 0, 0, 0);
+
+            std.log.warn("triangle list {}", .{i});
+            for (triangle_index_list) |idx| {
+                const p = positions[idx];
+                std.log.warn("idx: {} vertex: {d:.3}, {d:.3}", .{ idx, p.x, p.y });
+            }
         }
 
         render_pass.end(); // End the render pass after all layers are drawn
@@ -496,20 +505,39 @@ pub const WgpuRender = struct {
         while (!buffer_map_complete) {
             self.instance.processEvents();
         }
+
+        // --- START OF MODIFICATIONS FOR PIXEL COPY-BACK ---
         const buf: [*]u8 = @ptrCast(@alignCast(gpu_output_buffer.getMappedRange(0, output_size).?));
         defer gpu_output_buffer.unmap();
-        const output = buf[0..output_size];
-        const output_pix: []pixel.RGBA = @alignCast(mem.bytesAsSlice(pixel.RGBA, output));
+        const raw_output_bytes: []const u8 = buf[0..output_size]; // Keep as byte slice for accurate indexing
 
-        const width: usize = @intCast(output_extent.width);
-        for (0..output_extent.height) |h| {
-            const husize: usize = @intCast(h);
-            const s = husize * width;
-            const stride = output_pix[s .. s + width];
-            for (0..width) |w| {
-                sfc.putPixel(@intCast(w), @intCast(h), .{ .rgba = stride[w] });
+        const view_width: usize = @intCast(output_extent.width);
+        const view_height: usize = @intCast(output_extent.height);
+
+        // Calculate the aligned stride in terms of RGBA pixels for CPU-side reading
+        // output_bytes_per_row is already the aligned bytes per row from the GPU copy.
+        // We need to know how many RGBA structs that corresponds to.
+        const output_pixel_stride: usize = output_bytes_per_row / @sizeOf(pixel.RGBA);
+
+        for (0..view_height) |h| {
+            // Calculate the starting byte offset for the current row, using the aligned stride
+            const row_start_byte_offset = h * output_pixel_stride * @sizeOf(pixel.RGBA);
+
+            // Calculate the ending byte offset for the *actual pixel data* in this row (unaligned width)
+            const row_end_byte_offset = row_start_byte_offset + (view_width * @sizeOf(pixel.RGBA));
+
+            // Extract the byte slice containing only the actual pixel data for this row
+            // This prevents reading padding bytes as part of your image data.
+            const row_bytes = raw_output_bytes[row_start_byte_offset..row_end_byte_offset];
+
+            // Safely cast the row's bytes to a slice of pixel.RGBA
+            const row_pixels: []const pixel.RGBA = @alignCast(std.mem.bytesAsSlice(pixel.RGBA, row_bytes));
+
+            for (0..view_width) |w| {
+                sfc.putPixel(@intCast(w), @intCast(h), .{ .rgba = row_pixels[w] });
             }
         }
+        // --- END OF MODIFICATIONS FOR PIXEL COPY-BACK ---
     }
     fn handleBufferMap(status: wgpu.MapAsyncStatus, _: wgpu.StringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.C) void {
         std.log.info("buffer_map status={x:.8}\n", .{@intFromEnum(status)});

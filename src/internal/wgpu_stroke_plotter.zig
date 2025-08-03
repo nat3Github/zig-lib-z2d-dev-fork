@@ -46,7 +46,8 @@ pub fn plot(
     if (Dasher.validate(opts.dashes)) {
         // IMPORTANT: dashed_plotter.zig must also be adapted to return WgpuPolygon.
         // If not, this line will cause a type mismatch.
-        return dashed_plotter.plot(alloc, nodes, opts);
+        unreachable;
+        // return dashed_plotter.plot(alloc, nodes, opts);
     }
 
     var plotter = try Plotter.init(alloc, &opts);
@@ -432,12 +433,12 @@ pub fn plotOpenJoined(
         self.pen,
     );
     // Append in reverse order
-    for (inner_end_cap_points.items.len) |k| {
+    for (0..inner_end_cap_points.items.len) |k| {
         try self.result_polygon.append_point(inner_end_cap_points.items[inner_end_cap_points.items.len - 1 - k]);
     }
 
     // 5. Add accumulated inner path segment points to the result polygon (in reverse order)
-    for (self.current_inner_segment_points.items.len) |k| {
+    for (0..self.current_inner_segment_points.items.len) |k| {
         try self.result_polygon.append_point(self.current_inner_segment_points.items[self.current_inner_segment_points.items.len - 1 - k]);
     }
 
@@ -452,7 +453,7 @@ pub fn plotOpenJoined(
         self.pen,
     );
     // Append in reverse order
-    for (inner_start_cap_points.items.len) |k| {
+    for (0..inner_start_cap_points.items.len) |k| {
         try self.result_polygon.append_point(inner_start_cap_points.items[inner_start_cap_points.items.len - 1 - k]);
     }
 

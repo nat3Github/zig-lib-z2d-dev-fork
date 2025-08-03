@@ -572,7 +572,7 @@ pub fn fill(self: *Context) !void {
 /// all other joints along the way, with the style set in `setLineJoinMode`.
 ///
 /// This is a no-op if there are no nodes.
-pub fn stroke(self: *Context) painter.StrokeError!void {
+pub fn stroke(self: *Context) !void {
     const wrapped_pattern = self.wrapDither();
     try self.gpu_painter.stroke(
         &wrapped_pattern,
