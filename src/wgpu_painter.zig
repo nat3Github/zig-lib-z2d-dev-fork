@@ -466,11 +466,11 @@ pub const WgpuRender = struct {
             render_pass.setIndexBuffer(index_buffer, wgpu.IndexFormat.uint32, 0, index_data_bytes.len);
             render_pass.drawIndexed(@intCast(triangle_index_list.len), 1, 0, 0, 0);
 
-            std.log.warn("triangle list {}", .{i});
-            for (triangle_index_list) |idx| {
-                const p = positions[idx];
-                std.log.warn("idx: {} vertex: {d:.3}, {d:.3}", .{ idx, p.x, p.y });
-            }
+            // std.log.warn("triangle list {}", .{i});
+            // for (triangle_index_list) |idx| {
+            // const p = positions[idx];
+            // std.log.warn("idx: {} vertex: {d:.3}, {d:.3}", .{ idx, p.x, p.y });
+            // }
         }
 
         render_pass.end(); // End the render pass after all layers are drawn
@@ -506,38 +506,27 @@ pub const WgpuRender = struct {
             self.instance.processEvents();
         }
 
-        // --- START OF MODIFICATIONS FOR PIXEL COPY-BACK ---
         const buf: [*]u8 = @ptrCast(@alignCast(gpu_output_buffer.getMappedRange(0, output_size).?));
         defer gpu_output_buffer.unmap();
-        const raw_output_bytes: []const u8 = buf[0..output_size]; // Keep as byte slice for accurate indexing
+        const raw_output_bytes: []const u8 = buf[0..output_size];
 
         const view_width: usize = @intCast(output_extent.width);
         const view_height: usize = @intCast(output_extent.height);
-
-        // Calculate the aligned stride in terms of RGBA pixels for CPU-side reading
-        // output_bytes_per_row is already the aligned bytes per row from the GPU copy.
-        // We need to know how many RGBA structs that corresponds to.
         const output_pixel_stride: usize = output_bytes_per_row / @sizeOf(pixel.RGBA);
 
         for (0..view_height) |h| {
-            // Calculate the starting byte offset for the current row, using the aligned stride
             const row_start_byte_offset = h * output_pixel_stride * @sizeOf(pixel.RGBA);
 
-            // Calculate the ending byte offset for the *actual pixel data* in this row (unaligned width)
             const row_end_byte_offset = row_start_byte_offset + (view_width * @sizeOf(pixel.RGBA));
 
-            // Extract the byte slice containing only the actual pixel data for this row
-            // This prevents reading padding bytes as part of your image data.
             const row_bytes = raw_output_bytes[row_start_byte_offset..row_end_byte_offset];
 
-            // Safely cast the row's bytes to a slice of pixel.RGBA
             const row_pixels: []const pixel.RGBA = @alignCast(std.mem.bytesAsSlice(pixel.RGBA, row_bytes));
 
             for (0..view_width) |w| {
                 sfc.putPixel(@intCast(w), @intCast(h), .{ .rgba = row_pixels[w] });
             }
         }
-        // --- END OF MODIFICATIONS FOR PIXEL COPY-BACK ---
     }
     fn handleBufferMap(status: wgpu.MapAsyncStatus, _: wgpu.StringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.C) void {
         std.log.info("buffer_map status={x:.8}\n", .{@intFromEnum(status)});

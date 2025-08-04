@@ -62,7 +62,6 @@ pub fn plot(
     return plotter.result_polygon;
 }
 
-// --- REVISED `Plotter` struct for clearer `WgpuPolygon` adaptation ---
 const Plotter = struct {
     alloc: mem.Allocator,
     nodes: []const nodepkg.PathNode, // Made mutable for setting after init
