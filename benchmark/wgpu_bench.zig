@@ -84,14 +84,16 @@ fn benchmark(alloc: std.mem.Allocator, size: i32, comptime runs: usize) !struct 
 }
 
 fn perf_test(ctx: anytype, ran: *std.Random) !void {
-    // const r = ran.float(f64);
-    // const g = ran.float(f64);
-    // const b = ran.float(f64);
+    const r = ran.float(f32);
+    const g = ran.float(f32);
+    const b = ran.float(f32);
     const lw = ran.float(f64) * 10.0 + 1;
     const cap_mode = ran.enumValue(z2d.options.CapMode);
     const join_mode = ran.enumValue(z2d.options.JoinMode);
 
-    ctx.setSourceToPixel(.{ .rgba = .fromClamped(1, 1, 1, 0.5) });
+    const px = z2d.Pixel.fromColor(.{ .rgba = .{ r, g, b, 0.5 } });
+    // ctx.setSourceToPixel(.{ .rgba = .fromClamped(1, 1, 1, 0.5) });
+    ctx.setSourceToPixel(px);
     ctx.setLineWidth(lw);
     ctx.setLineCapMode(cap_mode);
     ctx.setLineJoinMode(join_mode);
