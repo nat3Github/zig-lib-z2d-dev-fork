@@ -18,7 +18,7 @@ pub fn main() !void {
         const tframe: f64 = 1_000_000;
         const cpu = @as(f64, @floatFromInt(run.cpu_avg_ns)) / tframe;
         const gpu = @as(f64, @floatFromInt(run.gpu_avg_ns)) / tframe;
-        std.debug.print("extent {d}x{d}, cpu: {d:.3} ms gpu: {d:3}ms\n", .{ ext, ext, cpu, gpu });
+        std.debug.print("extent {d}x{d}, cpu: {d:.3} ms gpu: {d:.2} ms\n", .{ ext, ext, cpu, gpu });
     }
 }
 const GpuContext = z2d.ContextWgpu;
