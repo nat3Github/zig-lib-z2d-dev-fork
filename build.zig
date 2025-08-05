@@ -201,6 +201,20 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&spec_test.step);
 
     /////////////////////////////////////////////////////////////////////////
+    // wgpu vs cpu benchmarks
+    /////////////////////////////////////////////////////////////////////////
+    const benchmark = b.addExecutable(.{
+        .name = "benchmark",
+        .root_source_file = b.path("benchmark/wgpu_bench.zig"),
+        .optimize = optimize,
+        .target = target,
+    });
+    benchmark.root_module.addImport("z2d", z2d);
+    const benchmark_run = b.addRunArtifact(benchmark);
+    const benchmark_step = b.step("benchmark", "comparison of cpu / gpu implementation performance");
+    benchmark_step.dependOn(&benchmark_run.step);
+
+    /////////////////////////////////////////////////////////////////////////
     // Release automation
     /////////////////////////////////////////////////////////////////////////
     const release_cmd = b.addSystemCommand(&.{"build-support/scripts/release.sh"});

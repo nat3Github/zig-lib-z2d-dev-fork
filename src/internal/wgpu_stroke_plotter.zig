@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
-//    Copyright © 2024-2025 Chris Marchesi
+// stroke_plotter.zig
 
 const std = @import("std");
 const debug = @import("std").debug;
@@ -16,8 +15,7 @@ const Face = @import("Face.zig");
 const Pen = @import("Pen.zig");
 const PlotterVTable = @import("PlotterVTable.zig");
 const Point = @import("Point.zig");
-// const Polygon = @import("Polygon.zig"); // Original Polygon, no longer used directly for output
-const WgpuPolygon = @import("wgpu_Polygon.zig"); // The new Polygon representation
+const WgpuPolygon = @import("wgpu_Polygon.zig");
 const Slope = @import("Slope.zig");
 const Spline = @import("Spline.zig");
 const Transformation = @import("../Transformation.zig");
@@ -33,7 +31,7 @@ pub const PlotterOptions = struct {
     dash_offset: f64,
     join_mode: options.JoinMode,
     miter_limit: f64,
-    scale: f64, // Keep scale, it's used in transformations
+    scale: f64,
     thickness: f64,
     tolerance: f64,
 };
@@ -42,53 +40,54 @@ pub fn plot(
     alloc: mem.Allocator,
     nodes: []const nodepkg.PathNode,
     opts: PlotterOptions,
-) Error!WgpuPolygon { // Return WgpuPolygon directly
+) Error!WgpuPolygon {
     if (Dasher.validate(opts.dashes)) {
-        // IMPORTANT: dashed_plotter.zig must also be adapted to return WgpuPolygon.
-        // If not, this line will cause a type mismatch.
         unreachable;
-        // return dashed_plotter.plot(alloc, nodes, opts);
     }
 
     var plotter = try Plotter.init(alloc, &opts);
-    plotter.nodes = nodes; // Set nodes after init
+    plotter.nodes = nodes;
 
     errdefer plotter.deinit();
     defer if (plotter.pen) |*p| p.deinit(alloc);
 
     try plotter.run();
 
-    // plotter.result_polygon now holds all the contours for the stroke.
     return plotter.result_polygon;
 }
 
 const Plotter = struct {
     alloc: mem.Allocator,
-    nodes: []const nodepkg.PathNode, // Made mutable for setting after init
+    nodes: []const nodepkg.PathNode,
     opts: *const PlotterOptions,
 
     pen: ?Pen,
 
-    points: PointBuffer = .{}, // point buffer for path segment (p0, p1, p2)
-    clockwise_: ?bool = null, // clockwise state
+    points: PointBuffer = .{},
+    clockwise_: ?bool = null,
 
-    // Instead of `Polygon.Contour`, use `ArrayList` as temporary buffers for the current stroke segment
     current_outer_segment_points: std.ArrayList(Point),
     current_inner_segment_points: std.ArrayList(Point),
 
-    // The final result WgpuPolygon
     result_polygon: WgpuPolygon,
 
-    // Store the start point of the current logical path (after a move_to)
     current_logical_path_start_point: ?Point = null,
 
-    // Initialization for Plotter will change
     pub fn init(alloc: mem.Allocator, opts: *const PlotterOptions) Error!@This() {
+        var initialized_pen: ?Pen = null;
+        if (opts.cap_mode == .round or opts.join_mode == .round) {
+            initialized_pen = try Pen.init(
+                alloc,
+                opts.thickness,
+                opts.tolerance,
+                opts.ctm,
+            );
+        }
         return .{
             .alloc = alloc,
-            .nodes = &.{}, // Will be set by caller
+            .nodes = &.{},
             .opts = opts,
-            .pen = null, // Will be lazy-init
+            .pen = initialized_pen,
             .current_outer_segment_points = std.ArrayList(Point).init(alloc),
             .current_inner_segment_points = std.ArrayList(Point).init(alloc),
             .result_polygon = WgpuPolygon.init(alloc),
@@ -117,14 +116,12 @@ const Plotter = struct {
 
     fn runMoveTo(self: *Plotter, node: nodepkg.PathMoveTo) Error!void {
         if (self.points.len > 0) {
-            // Before starting a new path, finalize the previous one if it exists
             try self.finish();
         }
         self.points.reset();
         self.points.add(node.point);
         self.current_logical_path_start_point = node.point;
 
-        // Reset temporary buffers for the new path segment
         self.current_outer_segment_points.clearAndFree();
         self.current_inner_segment_points.clearAndFree();
     }
@@ -136,7 +133,7 @@ const Plotter = struct {
     fn _runLineTo(self: *Plotter, join_mode: options.JoinMode, node: nodepkg.PathLineTo) Error!void {
         const current_point = self.points.last() orelse return InternalError.InvalidState;
         if (node.point.equal(current_point)) {
-            return; // consume degenerate nodes
+            return;
         }
         self.points.add(node.point);
 
@@ -145,9 +142,9 @@ const Plotter = struct {
                 @This(),
                 self,
                 join_mode,
-                self.points.tail(3) orelse unreachable, // p0
-                self.points.tail(2) orelse unreachable, // p1
-                self.points.tail(1) orelse unreachable, // p2
+                self.points.tail(3) orelse unreachable,
+                self.points.tail(2) orelse unreachable,
+                self.points.tail(1) orelse unreachable,
             );
         }
     }
@@ -190,15 +187,15 @@ const Plotter = struct {
                 try plotClosedJoined(
                     @This(),
                     self,
-                    initial_point, // Use the logical start point
-                    self.points.head(1) orelse unreachable, // Second point in `points` buffer
-                    self.points.tail(2) orelse unreachable, // Second to last point in `points` buffer
-                    self.points.tail(1) orelse unreachable, // Last point in `points` buffer
+                    initial_point,
+                    self.points.head(1) orelse unreachable,
+                    self.points.tail(2) orelse unreachable,
+                    self.points.tail(1) orelse unreachable,
                 );
             },
         }
         self.points.reset();
-        self.clockwise_ = null; // Reset for next path
+        self.clockwise_ = null;
     }
 
     fn finish(self: *Plotter) Error!void {
@@ -220,14 +217,14 @@ const Plotter = struct {
             ),
         }
         self.points.reset();
-        self.clockwise_ = null; // Reset for next path
+        self.clockwise_ = null;
     }
 
     fn plotDotted(self: *Plotter, point: Point) Error!void {
-        debug.assert(self.current_inner_segment_points.items.len == 0); // Inner should be empty
+        debug.assert(self.current_inner_segment_points.items.len == 0);
         if (self.opts.cap_mode == .round) {
             debug.assert(self.pen != null);
-            try self.result_polygon.finalize_current_contour(); // Ensure previous contour is finalized
+            try self.result_polygon.finalize_current_contour();
             for (self.pen.?.vertices.items) |v| {
                 try self.result_polygon.append_point(
                     .{
@@ -236,7 +233,7 @@ const Plotter = struct {
                     },
                 );
             }
-            try self.result_polygon.finalize_current_contour(); // Finalize the circle contour
+            try self.result_polygon.finalize_current_contour();
         }
     }
 
@@ -253,11 +250,9 @@ const Plotter = struct {
     };
 };
 
-// Adapted CapPlotterCtx for temporary ArrayLists
 const CapPlotterCtx = struct {
     alloc: mem.Allocator,
-    contour_points: *std.ArrayList(Point), // Points for the current cap
-    // `before` is irrelevant here, as we only append to ArrayList
+    contour_points: *std.ArrayList(Point),
     fn line_to(ctx: *anyopaque, err_: *?PlotterVTable.Error, node: nodepkg.PathLineTo) void {
         const self: *CapPlotterCtx = @ptrCast(@alignCast(ctx));
         self.contour_points.append(node.point) catch |err| {
@@ -267,10 +262,9 @@ const CapPlotterCtx = struct {
     }
 };
 
-// Adapted WgpuJoiner for temporary ArrayLists
 const WgpuJoiner = struct {
     const Self = @This();
-    plotter: *Plotter, // Reference to the main Plotter
+    plotter: *Plotter,
 
     plot_fn: *const fn (
         *const @This(),
@@ -311,50 +305,61 @@ const WgpuJoiner = struct {
 };
 
 pub fn plotSingle(T: type, self: *T, start: Point, end: Point) Error!void {
-    debug.assert(self.current_inner_segment_points.items.len == 0); // Inner should be empty for a single segment
+    debug.assert(self.current_inner_segment_points.items.len == 0);
 
-    const cap_points_face = Face.init(
+    const face = Face.init(
         start,
         end,
         self.opts.thickness,
         self.opts.ctm,
     );
 
-    // This function plots a single *closed* rectangle for the stroke.
-    // It will be added as one contour to `result_polygon`.
-    try self.result_polygon.finalize_current_contour(); // Start new contour for this stroke
-
-    var temp_cap_points = std.ArrayList(Point).init(self.alloc);
-    defer temp_cap_points.deinit();
-
-    var plotter_ctx: CapPlotterCtx = .{
-        .alloc = self.alloc,
-        .contour_points = &temp_cap_points,
-    };
-
-    // Plot points for the start cap
-    try cap_points_face.cap_p0(
-        &.{ .ptr = &plotter_ctx, .line_to = CapPlotterCtx.line_to },
-        self.opts.cap_mode,
-        true, // Clockwise for outer segment
-        self.pen,
-    );
-
-    // Plot points for the end cap (this will append to the same temp_cap_points)
-    try cap_points_face.cap_p1(
-        &.{ .ptr = &plotter_ctx, .line_to = CapPlotterCtx.line_to },
-        self.opts.cap_mode,
-        true, // Clockwise for outer segment
-        self.pen,
-    );
-
-    // Now, `temp_cap_points` contains all points for the single line's stroke rectangle.
-    // Append them to the `result_polygon`.
-    for (temp_cap_points.items) |p| {
-        try self.result_polygon.append_point(p);
-    }
     try self.result_polygon.finalize_current_contour();
 
+    var outer_points = std.ArrayList(Point).init(self.alloc);
+    defer outer_points.deinit();
+    var inner_points = std.ArrayList(Point).init(self.alloc);
+    defer inner_points.deinit();
+
+    var outer_cap_ctx: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &outer_points };
+    var inner_cap_ctx: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &inner_points };
+
+    try face.cap_p0(
+        &.{ .ptr = &outer_cap_ctx, .line_to = CapPlotterCtx.line_to },
+        self.opts.cap_mode,
+        true,
+        self.pen,
+    );
+
+    try face.cap_p1(
+        &.{ .ptr = &outer_cap_ctx, .line_to = CapPlotterCtx.line_to },
+        self.opts.cap_mode,
+        true,
+        self.pen,
+    );
+
+    try face.cap_p1(
+        &.{ .ptr = &inner_cap_ctx, .line_to = CapPlotterCtx.line_to },
+        self.opts.cap_mode,
+        false,
+        self.pen,
+    );
+
+    try face.cap_p0(
+        &.{ .ptr = &inner_cap_ctx, .line_to = CapPlotterCtx.line_to },
+        self.opts.cap_mode,
+        false,
+        self.pen,
+    );
+
+    for (outer_points.items) |p| {
+        try self.result_polygon.append_point(p);
+    }
+    for (0..inner_points.items.len) |k| {
+        try self.result_polygon.append_point(inner_points.items[inner_points.items.len - 1 - k]);
+    }
+
+    try self.result_polygon.finalize_current_contour();
     self.clockwise_ = null;
 }
 
@@ -381,84 +386,70 @@ pub fn plotOpenJoined(
 
     const clockwise = if (self.clockwise_) |cw| cw else true;
 
-    // This function processes a *single* open joined path segment.
-    // The final result should be a single contour in `result_polygon`.
-    try self.result_polygon.finalize_current_contour(); // Start a new contour for this stroke
+    try self.result_polygon.finalize_current_contour();
 
-    // 1. Add start cap points (outer side) to the result polygon
     var outer_start_cap_points = std.ArrayList(Point).init(self.alloc);
     defer outer_start_cap_points.deinit();
     var cap_ctx_outer_start: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &outer_start_cap_points };
     try cap_points_start.cap_p0(
         &.{ .ptr = &cap_ctx_outer_start, .line_to = CapPlotterCtx.line_to },
         self.opts.cap_mode,
-        clockwise, // Uses determined clockwise direction
+        clockwise,
         self.pen,
     );
     for (outer_start_cap_points.items) |p| {
         try self.result_polygon.append_point(p);
     }
 
-    // 2. Add accumulated outer path segment points to the result polygon
     for (self.current_outer_segment_points.items) |p| {
         try self.result_polygon.append_point(p);
     }
 
-    // 3. Add end cap points (outer side) to the result polygon
     var outer_end_cap_points = std.ArrayList(Point).init(self.alloc);
     defer outer_end_cap_points.deinit();
     var cap_ctx_outer_end: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &outer_end_cap_points };
     try cap_points_end.cap_p1(
         &.{ .ptr = &cap_ctx_outer_end, .line_to = CapPlotterCtx.line_to },
         self.opts.cap_mode,
-        clockwise, // Uses determined clockwise direction
+        clockwise,
         self.pen,
     );
     for (outer_end_cap_points.items) |p| {
         try self.result_polygon.append_point(p);
     }
 
-    // 4. Add end cap points (inner side, reversed) to the result polygon
-    // Note: cap_p1 is always from end to start, so for inner we reverse it.
     var inner_end_cap_points = std.ArrayList(Point).init(self.alloc);
     defer inner_end_cap_points.deinit();
     var cap_ctx_inner_end: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &inner_end_cap_points };
-    // The boolean `clockwise` passed to `cap_p1` controls which "side" of the cap is generated.
-    // For the inner side, it's the opposite of the outer.
     try cap_points_end.cap_p1(
         &.{ .ptr = &cap_ctx_inner_end, .line_to = CapPlotterCtx.line_to },
         self.opts.cap_mode,
-        !clockwise, // Opposite direction for inner cap
+        !clockwise,
         self.pen,
     );
-    // Append in reverse order
     for (0..inner_end_cap_points.items.len) |k| {
         try self.result_polygon.append_point(inner_end_cap_points.items[inner_end_cap_points.items.len - 1 - k]);
     }
 
-    // 5. Add accumulated inner path segment points to the result polygon (in reverse order)
     for (0..self.current_inner_segment_points.items.len) |k| {
         try self.result_polygon.append_point(self.current_inner_segment_points.items[self.current_inner_segment_points.items.len - 1 - k]);
     }
 
-    // 6. Add start cap points (inner side, reversed) to the result polygon
     var inner_start_cap_points = std.ArrayList(Point).init(self.alloc);
     defer inner_start_cap_points.deinit();
     var cap_ctx_inner_start: CapPlotterCtx = .{ .alloc = self.alloc, .contour_points = &inner_start_cap_points };
     try cap_points_start.cap_p0(
         &.{ .ptr = &cap_ctx_inner_start, .line_to = CapPlotterCtx.line_to },
         self.opts.cap_mode,
-        !clockwise, // Opposite direction for inner cap
+        !clockwise,
         self.pen,
     );
-    // Append in reverse order
     for (0..inner_start_cap_points.items.len) |k| {
         try self.result_polygon.append_point(inner_start_cap_points.items[inner_start_cap_points.items.len - 1 - k]);
     }
 
     try self.result_polygon.finalize_current_contour();
 
-    // Clear temporary buffers for the next path
     self.current_outer_segment_points.clearAndFree();
     self.current_inner_segment_points.clearAndFree();
     self.clockwise_ = null;
@@ -467,43 +458,31 @@ pub fn plotOpenJoined(
 pub fn plotClosedJoined(
     T: type,
     self: *T,
-    initial0: Point, // Logical start point of the path
-    initial1: Point, // Point after initial0
-    p1: Point, // Second to last point in path buffer
-    p2: Point, // Last point in path buffer
+    initial0: Point,
+    initial1: Point,
+    p1: Point,
+    p2: Point,
 ) Error!void {
-    // A closed path should result in two separate contours for tessellation:
-    // one for the outer boundary, and one for the inner boundary.
-
-    // First, complete the joins to ensure all points are in `current_outer_segment_points` and `current_inner_segment_points`.
-    // The `p2.equal(initial0)` check determines if the last segment effectively closes to the first point.
     if (!p2.equal(initial0)) {
-        // Normal case: do the final join to close the path
         try join(T, self, self.opts.join_mode, p1, p2, initial0);
         try join(T, self, self.opts.join_mode, p2, initial0, initial1);
     } else {
-        // Degenerate case: last point is already initial point
         try join(T, self, self.opts.join_mode, p1, initial0, initial1);
     }
 
-    // Now, `current_outer_segment_points` and `current_inner_segment_points` should contain
-    // the complete sets of points for the outer and inner contours of the closed stroke.
-
-    // Add outer contour to result_polygon
-    try self.result_polygon.finalize_current_contour(); // Start new contour
+    try self.result_polygon.finalize_current_contour();
     for (self.current_outer_segment_points.items) |p| {
         try self.result_polygon.append_point(p);
     }
-    try self.result_polygon.finalize_current_contour(); // Finalize outer contour
+    try self.result_polygon.finalize_current_contour();
 
-    // Add inner contour to result_polygon
-    try self.result_polygon.finalize_current_contour(); // Start new contour
-    for (self.current_inner_segment_points.items) |p| {
-        try self.result_polygon.append_point(p);
+    try self.result_polygon.finalize_current_contour();
+    // REVERSE THE INNER CONTOUR POINTS TO ENSURE OPPOSITE WINDING
+    for (0..self.current_inner_segment_points.items.len) |k| {
+        try self.result_polygon.append_point(self.current_inner_segment_points.items[self.current_inner_segment_points.items.len - 1 - k]);
     }
-    try self.result_polygon.finalize_current_contour(); // Finalize inner contour
+    try self.result_polygon.finalize_current_contour();
 
-    // Clear temporary buffers
     self.current_outer_segment_points.clearAndFree();
     self.current_inner_segment_points.clearAndFree();
     self.clockwise_ = null;
@@ -516,12 +495,11 @@ pub fn join(
     p0: Point,
     p1: Point,
     p2: Point,
-) mem.Allocator.Error!void { // Removed `before_outer`
-    const Joiner = WgpuJoiner; // Use the adapted Joiner
+) mem.Allocator.Error!void {
+    const Joiner = WgpuJoiner;
 
-    // Guard against no-op joins - if one of our segments is degenerate, just return.
     if (p0.equal(p1) or p1.equal(p2)) {
-        if (self.clockwise_ == null) self.clockwise_ = false; // Original had this
+        if (self.clockwise_ == null) self.clockwise_ = false;
         return;
     }
 
@@ -534,20 +512,19 @@ pub fn join(
 
     const outer_joiner: Joiner = if (direction_switched) .{
         .plotter = self,
-        .plot_fn = Joiner.plotInner, // Plot to inner buffer if direction switched
+        .plot_fn = Joiner.plotInner,
     } else .{
         .plotter = self,
-        .plot_fn = Joiner.plotOuter, // Plot to outer buffer otherwise
+        .plot_fn = Joiner.plotOuter,
     };
     const inner_joiner: Joiner = if (direction_switched) .{
         .plotter = self,
-        .plot_fn = Joiner.plotOuter, // Plot to outer buffer if direction switched
+        .plot_fn = Joiner.plotOuter,
     } else .{
         .plotter = self,
-        .plot_fn = Joiner.plotInner, // Plot to inner buffer otherwise
+        .plot_fn = Joiner.plotInner,
     };
 
-    // If our slopes are equal (co-linear), only plot the end of the inbound face, regardless of join mode.
     if (in_face.dev_slope.compare(out_face.dev_slope) == 0) {
         try outer_joiner.plot(
             if (join_clockwise) in_face.p1_ccw else in_face.p1_cw,
@@ -595,9 +572,7 @@ pub fn join(
         },
     }
 
-    // Inner join. We plot our ends depending on direction, going through the midpoint.
     try inner_joiner.plot(if (join_clockwise) in_face.p1_cw else in_face.p1_ccw);
-    try inner_joiner.plot(p1); // The actual "center" point of the join
     try inner_joiner.plot(if (join_clockwise) out_face.p0_cw else out_face.p0_ccw);
 
     if (self.clockwise_ == null) self.clockwise_ = poly_clockwise;

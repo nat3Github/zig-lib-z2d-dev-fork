@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//   Copyright © 2024-2025 Chris Marchesi
+//   Copyright © 2024-2025 Chris Marchesi
 
 //! Contains unmanaged painter functions for filling and stroking.
 
@@ -36,11 +36,13 @@ const PointF32 = WgpuPolygon.PointF32;
 const fill_plotter = @import("internal/wgpu_fill_plotter.zig");
 const stroke_plotter = @import("internal/wgpu_stroke_plotter.zig");
 
+const debug_logging = true;
+
 pub const Painter = struct {
     alloc: mem.Allocator,
     arena: std.heap.ArenaAllocator,
-    batch_vertices: BatchTriangleVertices,
-    batch_indexes: BatchTriangleIndices,
+    batch_vertices: BatchVertices,
+    batch_indexes: BatchTriangles,
     gpu_renderer: WgpuRender,
     pub fn init(alloc: mem.Allocator) !@This() {
         var ren: WgpuRender = undefined;
@@ -62,26 +64,25 @@ pub const Painter = struct {
         try self.gpu_renderer.render_triangle_list(sfc, &self.batch_vertices, &self.batch_indexes);
     }
     pub fn add_tesselated_triangles_to_batch(self: *@This(), tess: *libtess.TESStesselator, pattern: *const Pattern) !void {
+        const offset = std.math.cast(i32, (self.batch_vertices.total_len())) orelse return InternalError.InvalidState;
         const triangle_count = libtess.tessGetElementCount(tess);
         const vertices_pointer: [*]const PointF32 = @ptrCast(libtess.tessGetVertices(tess));
         var vertices: []const PointF32 = undefined;
-        const idx_offset: u32 = @intCast(self.batch_vertices.current_len());
         vertices.ptr = vertices_pointer;
         vertices.len = @intCast(libtess.tessGetVertexCount(tess));
         for (vertices) |v| {
             const color = pattern.getPixel(@intFromFloat(v.x), @intFromFloat(v.y));
             const color_arr = mem.bytesToValue([4]u8, mem.asBytes(&color.rgba));
-            try self.batch_vertices.append(v, color_arr);
+            try self.batch_vertices.add_vertex(v, color_arr);
         }
-        try self.batch_vertices.finalize();
+        try self.batch_vertices.finalize_vertex_list();
         var index_slices: []const c_int = undefined;
         index_slices.ptr = libtess.tessGetElements(tess);
         index_slices.len = @intCast(triangle_count * 3);
         for (index_slices) |idx| {
-            const idx_u32: u32 = @intCast(idx);
-            try self.batch_indexes.append(idx_u32 + idx_offset);
+            try self.batch_indexes.add_index(@intCast(idx));
         }
-        try self.batch_indexes.finalize();
+        try self.batch_indexes.finalize_index_list(offset);
     }
 
     pub fn fill(
@@ -94,14 +95,16 @@ pub const Painter = struct {
         if (!PathNode.isClosedNodeSet(nodes)) return error.PathNotClosed;
         var alloc = self.arena.allocator();
         defer _ = self.arena.reset(.retain_capacity);
-        const polygons = try fill_plotter.plot(alloc, nodes, @max(opts.tolerance, 0.001));
+        var polygons = try fill_plotter.plot(alloc, nodes, @max(opts.tolerance, 0.001));
+        defer polygons.deinit();
         var tess_alloc = libtess_util.tess_alloc_from(&alloc);
         const tess = libtess.tessNewTess(&tess_alloc) orelse return InternalError.InvalidState;
+        defer libtess.tessDeleteTess(tess);
         const points = polygons.points.items;
         for (polygons.range.items) |range| {
             const slice = points[range.start..range.end];
             const ptr: *anyopaque = @alignCast(@ptrCast(slice.ptr));
-            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), @intCast(points.len));
+            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), @intCast(slice.len));
         }
         const tess_winding = switch (opts.fill_rule) {
             .even_odd => libtess.TESS_WINDING_ODD,
@@ -132,7 +135,7 @@ pub const Painter = struct {
         const thickness: f64 = if (opts.line_width >= minimum_line_width) opts.line_width else minimum_line_width;
         const tolerance: f64 = @max(opts.tolerance, 0.001);
 
-        const polygons = try stroke_plotter.plot(alloc, nodes, .{
+        var polygons = try stroke_plotter.plot(alloc, nodes, .{
             .cap_mode = cap_mode,
             .ctm = ctm,
             .dash_offset = dash_offset,
@@ -143,61 +146,106 @@ pub const Painter = struct {
             .thickness = thickness,
             .tolerance = tolerance,
         });
+        defer polygons.deinit();
 
         var tess_alloc = libtess_util.tess_alloc_from(&alloc);
         const tess = libtess.tessNewTess(&tess_alloc) orelse return InternalError.InvalidState;
+        defer libtess.tessDeleteTess(tess);
 
         const points = polygons.points.items;
         for (polygons.range.items) |range| {
             const slice = points[range.start..range.end];
             const ptr: *anyopaque = @alignCast(@ptrCast(slice.ptr));
-            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), @intCast(points.len));
+            libtess.tessAddContour(tess, 2, ptr, @sizeOf(PointF32), @intCast(slice.len));
         }
         const tess_winding = libtess.TESS_WINDING_NONZERO;
         const res = libtess.tessTesselate(tess, tess_winding, libtess.TESS_POLYGONS, 3, 2, null);
         if (res != 1) return error.TesselateFailed;
         try self.add_tesselated_triangles_to_batch(tess, pattern);
+
+        log_path_nodes(nodes);
+        log_polygon(polygons);
     }
 };
+fn log_polygon(
+    polygon: WgpuPolygon,
+) void {
+    for (polygon.range.items, 0..) |r, i| {
+        const contour = polygon.points.items[r.start..r.end];
+        debug_log("contour {}:", .{i});
+        for (contour) |p| {
+            debug_log("p {d:.3},{d:.3}", .{ p.x, p.y });
+        }
+    }
+}
+fn log_path_nodes(
+    nodes: []const PathNode,
+) void {
+    for (nodes) |n| {
+        debug_log("node {any}", .{n});
+    }
+}
 
-const BatchTriangleIndices = struct {
-    indices: std.ArrayList(u32),
-    range: std.ArrayList(Range),
+const BatchTriangles = struct {
+    indices: std.ArrayList(u32), // flat list of index lists without offset
+    range: std.ArrayList(Range), // range indexes into indices,
+    range_index_offset: std.ArrayList(i32), // the offset for a index list
     range_start_idx: usize = 0,
-    pub fn init(gpa: std.mem.Allocator) BatchTriangleIndices {
+    pub fn init(gpa: std.mem.Allocator) BatchTriangles {
         return .{
             .indices = std.ArrayList(u32).init(gpa),
             .range = std.ArrayList(Range).init(gpa),
+            .range_index_offset = std.ArrayList(i32).init(gpa),
         };
     }
     pub fn deinit(self: *@This()) void {
+        self.range_index_offset.deinit();
         self.range.deinit();
         self.indices.deinit();
     }
-    pub fn append(self: *@This(), index: u32) !void {
+    pub fn add_index(self: *@This(), index: u32) !void {
         try self.indices.append(index);
     }
-    pub fn finalize(self: *@This()) !void {
+    pub fn finalize_index_list(self: *@This(), vertex_index_offset: i32) !void {
         const current_end_idx = self.indices.items.len;
         if (self.current_len() > 0) {
             try self.range.append(.{
                 .start = self.range_start_idx,
                 .end = current_end_idx,
             });
+            errdefer _ = self.range.pop();
+            try self.range_index_offset.append(vertex_index_offset);
         }
         self.range_start_idx = current_end_idx;
     }
-    pub fn get_triangle_indices(self: *const @This(), idx: usize) []const u32 {
+    pub fn get_triangle_list(self: *const @This(), idx: usize) struct {
+        triangle_index_offset: usize,
+        vertex_index_offset: i32,
+        index_list: []const u32,
+    } {
         const range = self.range.items[idx];
-        return self.indices.items[range.start..range.end];
+        return .{
+            .triangle_index_offset = range.start,
+            .vertex_index_offset = self.range_index_offset.items[idx],
+            .index_list = self.indices.items[range.start..range.end],
+        };
     }
-    pub fn len(self: *const @This()) usize {
+    pub fn lookup_point(_: *const @This(), vertices: *const BatchVertices, index: u32, vertex_offset: i32) struct { p: PointF32, c: Color4U8 } {
+        const global_index = @as(usize, index) + @as(usize, @intCast(vertex_offset));
+        const c = vertices.vertex_colors.items[global_index];
+        const p = vertices.vertex_points.items[global_index];
+        return .{
+            .p = p,
+            .c = c,
+        };
+    }
+    pub fn number_of_triangle_lists(self: *const @This()) usize {
         return self.range.items.len;
     }
     pub fn max_len_index_list(self: *const @This()) usize {
         var max: usize = 0;
-        for (0..self.len()) |i| {
-            const l = self.get_triangle_indices(i).len;
+        for (0..self.number_of_triangle_lists()) |i| {
+            const l = self.get_triangle_list(i).len;
             if (l > max) max = l;
         }
         return max;
@@ -207,8 +255,8 @@ const BatchTriangleIndices = struct {
     }
 };
 
-const BatchTriangleVertices = struct {
-    const Color4U8 = [4]u8;
+const Color4U8 = [4]u8;
+const BatchVertices = struct {
     vertex_points: std.ArrayList(PointF32),
     vertex_colors: std.ArrayList(Color4U8),
     range: std.ArrayList(Range),
@@ -225,11 +273,11 @@ const BatchTriangleVertices = struct {
         self.vertex_points.deinit();
         self.vertex_colors.deinit();
     }
-    pub fn append(self: *@This(), point: PointF32, color: [4]u8) !void {
+    pub fn add_vertex(self: *@This(), point: PointF32, color: [4]u8) !void {
         try self.vertex_points.append(point);
         try self.vertex_colors.append(color);
     }
-    pub fn finalize(self: *@This()) !void {
+    pub fn finalize_vertex_list(self: *@This()) !void {
         const current_end_idx = self.vertex_points.items.len;
         if (self.current_len() > 0) {
             try self.range.append(.{
@@ -241,6 +289,9 @@ const BatchTriangleVertices = struct {
     }
     pub fn current_len(self: *const @This()) usize {
         return self.vertex_colors.items.len - self.range_start_idx;
+    }
+    pub fn total_len(self: *const @This()) usize {
+        return self.vertex_colors.items.len;
     }
 };
 
@@ -281,7 +332,7 @@ pub const WgpuRender = struct {
             };
     };
 
-    const swap_chain_format = wgpu.TextureFormat.rgba8_unorm_srgb;
+    const swap_chain_format = wgpu.TextureFormat.rgba8_unorm;
 
     instance: *wgpu.Instance,
     adapter: *wgpu.Adapter,
@@ -290,6 +341,9 @@ pub const WgpuRender = struct {
     pipeline: *wgpu.RenderPipeline,
     shader_module: *wgpu.ShaderModule,
 
+    bind_group_layout: *wgpu.BindGroupLayout,
+    screen_size_buffer: *wgpu.Buffer,
+
     pub fn deinit(self: *@This()) void {
         defer self.instance.release();
         defer self.adapter.release();
@@ -297,6 +351,8 @@ pub const WgpuRender = struct {
         defer self.queue.release();
         defer self.shader_module.release();
         defer self.pipeline.release();
+        defer self.bind_group_layout.release();
+        defer self.screen_size_buffer.release();
     }
 
     pub fn init(self: *@This()) !void {
@@ -312,6 +368,18 @@ pub const WgpuRender = struct {
         errdefer self.queue.release();
         try self.init_shader_module();
         errdefer self.shader_module.release();
+
+        // Initialize new uniform buffer objects
+        try self.init_bind_group_layout();
+        errdefer self.bind_group_layout.release();
+        self.screen_size_buffer = self.device.createBuffer(&wgpu.BufferDescriptor{
+            .label = wgpu.StringView.fromSlice("Screen Size Uniform Buffer"),
+            .size = @sizeOf([2]f32),
+            .usage = wgpu.BufferUsages.uniform | wgpu.BufferUsages.copy_dst,
+            .mapped_at_creation = @as(u32, @intFromBool(false)),
+        }).?;
+        errdefer self.screen_size_buffer.release();
+
         try self.init_pipeline();
         errdefer self.pipeline.release();
     }
@@ -323,6 +391,24 @@ pub const WgpuRender = struct {
         })).?;
     }
 
+    fn init_bind_group_layout(self: *@This()) !void {
+        const bind_group_layout_entries = &[_]wgpu.BindGroupLayoutEntry{
+            wgpu.BindGroupLayoutEntry{
+                .binding = 0,
+                .visibility = wgpu.ShaderStages.vertex,
+                .buffer = wgpu.BufferBindingLayout{
+                    .type = wgpu.BufferBindingType.uniform,
+                    .min_binding_size = @sizeOf([2]f32),
+                },
+            },
+        };
+        self.bind_group_layout = self.device.createBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+            .label = wgpu.StringView.fromSlice("Screen Size Bind Group Layout"),
+            .entry_count = bind_group_layout_entries.len,
+            .entries = bind_group_layout_entries.ptr,
+        }).?;
+    }
+
     fn init_pipeline(self: *@This()) !void {
         const color_targets = &[_]wgpu.ColorTargetState{
             wgpu.ColorTargetState{
@@ -330,16 +416,13 @@ pub const WgpuRender = struct {
                 .blend = &wgpu.BlendState{
                     .color = wgpu.BlendComponent{
                         .operation = .add,
-                        .src_factor = .src_alpha, // Use source alpha for color
+                        .src_factor = .one, // premultiplied
                         .dst_factor = .one_minus_src_alpha,
                     },
                     .alpha = wgpu.BlendComponent{
                         .operation = .add,
-                        .src_factor = .one, // Take the source alpha directly
-                        .dst_factor = .one_minus_src_alpha, // Mix with destination alpha
-                        // OR, if you just want source alpha to overwrite destination:
-                        // .src_factor = .one,
-                        // .dst_factor = .zero, // This would make final_alpha = source_alpha
+                        .src_factor = .one,
+                        .dst_factor = .one_minus_src_alpha,
                     },
                 },
             },
@@ -348,7 +431,18 @@ pub const WgpuRender = struct {
             VertexPosition.layout,
             VertexColor.layout,
         };
+
+        // Create a pipeline layout that includes our bind group layout
+        const bind_group_layouts: []const *wgpu.BindGroupLayout = &.{self.bind_group_layout};
+        const pipeline_layout = self.device.createPipelineLayout(&wgpu.PipelineLayoutDescriptor{
+            .label = wgpu.StringView.fromSlice("Render Pipeline Layout"),
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = bind_group_layouts.ptr,
+        }).?;
+        defer pipeline_layout.release();
+
         self.pipeline = self.device.createRenderPipeline(&wgpu.RenderPipelineDescriptor{
+            .layout = pipeline_layout,
             .vertex = wgpu.VertexState{
                 .module = self.shader_module,
                 .entry_point = wgpu.StringView.fromSlice("vertex_shader2"),
@@ -365,9 +459,9 @@ pub const WgpuRender = struct {
         }) orelse return error.CreateRenderPipeline;
     }
 
-    pub fn render_triangle_list(self: *WgpuRender, sfc: *Surface, triangle_vert: *const BatchTriangleVertices, triangle_idx: *const BatchTriangleIndices) !void {
-        const positions = triangle_vert.vertex_points.items;
-        const colors = triangle_vert.vertex_colors.items;
+    pub fn render_triangle_list(self: *WgpuRender, sfc: *Surface, triangle_vertices: *const BatchVertices, triangles: *const BatchTriangles) !void {
+        const positions = triangle_vertices.vertex_points.items;
+        const colors = triangle_vertices.vertex_colors.items;
         const position_data_bytes = std.mem.sliceAsBytes(positions);
         const color_data_bytes = std.mem.sliceAsBytes(colors);
 
@@ -387,10 +481,10 @@ pub const WgpuRender = struct {
         }).?;
         defer color_buffer.release();
 
-        const max_index_data_len = triangle_idx.max_len_index_list() * @sizeOf(u32);
+        const total_index_data_len = triangles.indices.items.len * @sizeOf(u32);
         const index_buffer = self.device.createBuffer(&wgpu.BufferDescriptor{
             .label = wgpu.StringView.fromSlice("Index Buffer"),
-            .size = max_index_data_len, // allocate for the largest possible index list
+            .size = total_index_data_len,
             .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
             .mapped_at_creation = @as(u32, @intFromBool(false)),
         }).?;
@@ -398,6 +492,7 @@ pub const WgpuRender = struct {
 
         self.queue.writeBuffer(position_buffer, 0, position_data_bytes.ptr, position_data_bytes.len);
         self.queue.writeBuffer(color_buffer, 0, color_data_bytes.ptr, color_data_bytes.len);
+        self.queue.writeBuffer(index_buffer, 0, std.mem.sliceAsBytes(triangles.indices.items).ptr, total_index_data_len);
 
         const output_extent = wgpu.Extent3D{
             .width = @intCast(sfc.getWidth()),
@@ -432,6 +527,28 @@ pub const WgpuRender = struct {
         }).?;
         defer gpu_output_buffer.release();
 
+        // Update and write the uniform buffer with current screen dimensions
+        const screen_size = [2]f32{ @as(f32, @floatFromInt(sfc.getWidth())), @as(f32, @floatFromInt(sfc.getHeight())) };
+        const screen_size_bytes = std.mem.sliceAsBytes(&screen_size);
+        self.queue.writeBuffer(self.screen_size_buffer, 0, screen_size_bytes.ptr, screen_size_bytes.len);
+
+        // Create a new bind group with the updated uniform buffer
+        const bindgroup_entries: []const wgpu.BindGroupEntry = &.{
+            wgpu.BindGroupEntry{
+                .binding = 0,
+                .buffer = self.screen_size_buffer,
+                .offset = 0,
+                .size = @sizeOf([2]f32),
+            },
+        };
+        const bind_group = self.device.createBindGroup(&wgpu.BindGroupDescriptor{
+            .label = wgpu.StringView.fromSlice("Screen Size Bind Group"),
+            .layout = self.bind_group_layout,
+            .entry_count = bindgroup_entries.len,
+            .entries = bindgroup_entries.ptr,
+        }).?;
+        defer bind_group.release();
+
         // Begin command encoder and render pass once for all layers
         const encoder = self.device.createCommandEncoder(&wgpu.CommandEncoderDescriptor{
             .label = wgpu.StringView.fromSlice("Command Encoder"),
@@ -440,7 +557,7 @@ pub const WgpuRender = struct {
 
         const color_attachments = &[_]wgpu.ColorAttachment{wgpu.ColorAttachment{
             .view = target_texture_view,
-            .clear_value = wgpu.Color{ .r = 1, .g = 0, .b = 1, .a = 0 },
+            .clear_value = wgpu.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .load_op = wgpu.LoadOp.clear, // Clear the texture at the start of the pass
             .store_op = wgpu.StoreOp.store,
         }};
@@ -451,29 +568,30 @@ pub const WgpuRender = struct {
         defer render_pass.release();
 
         render_pass.setPipeline(self.pipeline);
-        // Set both vertex buffers once for the entire render pass
-        render_pass.setVertexBuffer(0, position_buffer, 0, position_data_bytes.len); // Slot 0 for positions
-        render_pass.setVertexBuffer(1, color_buffer, 0, color_data_bytes.len); // Slot 1 for colors
+        render_pass.setBindGroup(0, bind_group, 0, null);
+        render_pass.setVertexBuffer(0, position_buffer, 0, position_data_bytes.len);
+        render_pass.setVertexBuffer(1, color_buffer, 0, color_data_bytes.len);
+        debug_log("Begin Rendering process", .{});
 
-        for (0..triangle_idx.len()) |i| {
-            const triangle_index_list = triangle_idx.get_triangle_indices(i);
-            const index_data_bytes = std.mem.sliceAsBytes(triangle_index_list);
+        render_pass.setIndexBuffer(index_buffer, wgpu.IndexFormat.uint32, 0, total_index_data_len);
 
-            // Update the index buffer for the current layer
-            self.queue.writeBuffer(index_buffer, 0, index_data_bytes.ptr, index_data_bytes.len);
-
-            // Set the index buffer and draw for the current layer
-            render_pass.setIndexBuffer(index_buffer, wgpu.IndexFormat.uint32, 0, index_data_bytes.len);
-            render_pass.drawIndexed(@intCast(triangle_index_list.len), 1, 0, 0, 0);
-
-            // std.log.warn("triangle list {}", .{i});
-            // for (triangle_index_list) |idx| {
-            // const p = positions[idx];
-            // std.log.warn("idx: {} vertex: {d:.3}, {d:.3}", .{ idx, p.x, p.y });
-            // }
+        for (0..triangles.number_of_triangle_lists()) |i| {
+            const t = triangles.get_triangle_list(i);
+            debug_log("render triangle list {d} with drawIndexed (index_count={d}, vertex_idx_offset={d}, indices_idx_offset={d})", .{ i, t.index_list.len, t.vertex_index_offset, t.triangle_index_offset });
+            for (t.index_list) |idx| {
+                const v = triangles.lookup_point(triangle_vertices, idx, t.vertex_index_offset);
+                debug_log("vertex: {d:.3}, {d:.3}", .{ v.p.x, v.p.y });
+            }
+            render_pass.drawIndexed(
+                @intCast(t.index_list.len),
+                1,
+                @intCast(t.triangle_index_offset),
+                t.vertex_index_offset,
+                0,
+            );
         }
 
-        render_pass.end(); // End the render pass after all layers are drawn
+        render_pass.end();
 
         const img_copy_src = wgpu.TexelCopyTextureInfo{
             .origin = wgpu.Origin3D{},
@@ -516,15 +634,12 @@ pub const WgpuRender = struct {
 
         for (0..view_height) |h| {
             const row_start_byte_offset = h * output_pixel_stride * @sizeOf(pixel.RGBA);
-
             const row_end_byte_offset = row_start_byte_offset + (view_width * @sizeOf(pixel.RGBA));
-
             const row_bytes = raw_output_bytes[row_start_byte_offset..row_end_byte_offset];
-
-            const row_pixels: []const pixel.RGBA = @alignCast(std.mem.bytesAsSlice(pixel.RGBA, row_bytes));
-
+            const row_pixels: []const z2d.pixel.RGBA = @alignCast(std.mem.bytesAsSlice(z2d.pixel.RGBA, row_bytes));
             for (0..view_width) |w| {
-                sfc.putPixel(@intCast(w), @intCast(h), .{ .rgba = row_pixels[w] });
+                const px = z2d.Pixel{ .rgba = row_pixels[w] };
+                sfc.putPixel(@intCast(w), @intCast(h), px);
             }
         }
     }
@@ -533,4 +648,18 @@ pub const WgpuRender = struct {
         const complete: *bool = @ptrCast(@alignCast(userdata1));
         complete.* = true;
     }
+    fn u8tof32(k: [4]u8) [4]f32 {
+        return .{
+            @as(f32, @floatFromInt(k[0])) / 255.0,
+            @as(f32, @floatFromInt(k[1])) / 255.0,
+            @as(f32, @floatFromInt(k[2])) / 255.0,
+            @as(f32, @floatFromInt(k[3])) / 255.0,
+        };
+    }
 };
+
+fn debug_log(comptime fmt: anytype, arg: anytype) void {
+    if (debug_logging) {
+        std.log.warn(fmt, arg);
+    }
+}
