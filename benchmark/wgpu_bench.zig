@@ -12,12 +12,13 @@ pub fn main() !void {
         600,
         1200,
     };
-    for (extents, 0..) |ext, i| {
+    std.debug.print("benchmark:\ncomparing cpu based rendering to gpu rendering\nequal fixed random seed\nmeasurements are averaged over {d} runs\nkeep in mind the results are hardware and driver dependent!\n", .{runs});
+    for (extents) |ext| {
         const run = try benchmark(gpa.allocator(), ext, runs);
         const tframe: f64 = 1_000_000;
         const cpu = @as(f64, @floatFromInt(run.cpu_avg_ns)) / tframe;
         const gpu = @as(f64, @floatFromInt(run.gpu_avg_ns)) / tframe;
-        std.debug.print("run {d}, cpu_ms: {d:.3} gpu_ms: {d:3}\n", .{ i, cpu, gpu });
+        std.debug.print("extent {d}x{d}, cpu: {d:.3} ms gpu: {d:3}ms\n", .{ ext, ext, cpu, gpu });
     }
 }
 const GpuContext = z2d.ContextWgpu;
@@ -59,7 +60,7 @@ fn benchmark(alloc: std.mem.Allocator, size: i32, comptime runs: usize) !struct 
         try z2d.png_exporter.writeToPNGFile(sf, "benchmark/output/bench-cpu.png", .{});
         clear(&sf);
 
-        var gpu_ctx = try GpuContext.init(alloc, &sf);
+        var gpu_ctx = try GpuContext.init(alloc, &sf, .default);
         defer gpu_ctx.deinit();
         timer.reset();
         for (0..workloops) |_| try perf_test(&gpu_ctx, &gpu_ran);

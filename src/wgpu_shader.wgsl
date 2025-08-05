@@ -4,6 +4,7 @@ struct VertexInput {
     @location(1) color: vec4<f32>,
 };
 
+// Define the struct for the uniform buffer first
 struct ScreenUniforms {
     screen_size: vec2<f32>,
 };

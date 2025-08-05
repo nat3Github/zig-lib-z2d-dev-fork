@@ -577,3 +577,6 @@ pub fn join(
 
     if (self.clockwise_ == null) self.clockwise_ = poly_clockwise;
 }
+
+// SPDX-License-Identifier: MPL-2.0
+//   Copyright © 2024-2025 Chris Marchesi

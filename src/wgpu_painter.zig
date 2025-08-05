@@ -1,8 +1,3 @@
-// SPDX-License-Identifier: MPL-2.0
-//   Copyright © 2024-2025 Chris Marchesi
-
-//! Contains unmanaged painter functions for filling and stroking.
-
 const wgpu = @import("wgpu");
 const libtess = @import("libtess").c;
 const libtess_util = @import("libtess").util;
@@ -44,9 +39,9 @@ pub const Painter = struct {
     batch_vertices: BatchVertices,
     batch_indexes: BatchTriangles,
     gpu_renderer: WgpuRender,
-    pub fn init(alloc: mem.Allocator) !@This() {
+    pub fn init(alloc: mem.Allocator, aa_mode: options.AntiAliasMode) !@This() {
         var ren: WgpuRender = undefined;
-        try ren.init();
+        try ren.init(aa_mode);
         return @This(){
             .alloc = alloc,
             .arena = .init(alloc),
@@ -61,7 +56,10 @@ pub const Painter = struct {
         self.batch_indexes.deinit();
     }
     pub fn finalize(self: *@This(), sfc: *Surface) !void {
-        try self.gpu_renderer.render_triangle_list(sfc, &self.batch_vertices, &self.batch_indexes);
+        switch (self.gpu_renderer.aa_mode) {
+            .default => try self.gpu_renderer.render_triangle_list(sfc, &self.batch_vertices, &self.batch_indexes, true),
+            .none => try self.gpu_renderer.render_triangle_list(sfc, &self.batch_vertices, &self.batch_indexes, false),
+        }
     }
     pub fn add_tesselated_triangles_to_batch(self: *@This(), tess: *libtess.TESStesselator, pattern: *const Pattern) !void {
         const offset = std.math.cast(i32, (self.batch_vertices.total_len())) orelse return InternalError.InvalidState;
@@ -245,7 +243,7 @@ const BatchTriangles = struct {
     pub fn max_len_index_list(self: *const @This()) usize {
         var max: usize = 0;
         for (0..self.number_of_triangle_lists()) |i| {
-            const l = self.get_triangle_list(i).len;
+            const l = self.get_triangle_list(i).index_list.len;
             if (l > max) max = l;
         }
         return max;
@@ -344,6 +342,9 @@ pub const WgpuRender = struct {
     bind_group_layout: *wgpu.BindGroupLayout,
     screen_size_buffer: *wgpu.Buffer,
 
+    // Store the anti-aliasing mode
+    aa_mode: options.AntiAliasMode,
+
     pub fn deinit(self: *@This()) void {
         defer self.instance.release();
         defer self.adapter.release();
@@ -355,8 +356,9 @@ pub const WgpuRender = struct {
         defer self.screen_size_buffer.release();
     }
 
-    pub fn init(self: *@This()) !void {
-        self.instance = wgpu.Instance.create(null).?;
+    pub fn init(self: *@This(), aamode: options.AntiAliasMode) !void {
+        self.aa_mode = aamode;
+        self.instance = wgpu.Instance.create(null) orelse return error.NoInstance;
         errdefer self.instance.release();
         self.adapter = self.instance.requestAdapterSync(&wgpu.RequestAdapterOptions{}, 0).adapter orelse return error.NoAdapter;
         errdefer self.adapter.release();
@@ -441,7 +443,7 @@ pub const WgpuRender = struct {
         }).?;
         defer pipeline_layout.release();
 
-        self.pipeline = self.device.createRenderPipeline(&wgpu.RenderPipelineDescriptor{
+        var pipeline_desc = wgpu.RenderPipelineDescriptor{
             .layout = pipeline_layout,
             .vertex = wgpu.VertexState{
                 .module = self.shader_module,
@@ -455,11 +457,29 @@ pub const WgpuRender = struct {
                 .front_face = wgpu.FrontFace.ccw,
                 .cull_mode = wgpu.CullMode.none,
             },
-            .multisample = wgpu.MultisampleState{},
-        }) orelse return error.CreateRenderPipeline;
+            .multisample = .{},
+        };
+        if (self.aa_mode == .default) {
+            pipeline_desc.multisample = wgpu.MultisampleState{
+                .count = 4,
+                .mask = 0xFFFFFFFF,
+                .alpha_to_coverage_enabled = @as(u32, @intFromBool(false)),
+            };
+        }
+        self.pipeline = self.device.createRenderPipeline(&pipeline_desc) orelse return error.CreateRenderPipeline;
     }
 
-    pub fn render_triangle_list(self: *WgpuRender, sfc: *Surface, triangle_vertices: *const BatchVertices, triangles: *const BatchTriangles) !void {
+    const WgpuError = error{
+        createBuffer,
+        createTexture,
+        createView,
+        createBindgroup,
+        createCommandEncoder,
+        beginRenderPass,
+        encoderFinish,
+    };
+
+    pub fn render_triangle_list(self: *WgpuRender, sfc: *Surface, triangle_vertices: *const BatchVertices, triangles: *const BatchTriangles, anti_aliased: bool) !void {
         const positions = triangle_vertices.vertex_points.items;
         const colors = triangle_vertices.vertex_colors.items;
         const position_data_bytes = std.mem.sliceAsBytes(positions);
@@ -470,7 +490,7 @@ pub const WgpuRender = struct {
             .size = position_data_bytes.len,
             .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
             .mapped_at_creation = @as(u32, @intFromBool(false)),
-        }).?;
+        }) orelse return WgpuError.createBuffer;
         defer position_buffer.release();
 
         const color_buffer = self.device.createBuffer(&wgpu.BufferDescriptor{
@@ -478,7 +498,7 @@ pub const WgpuRender = struct {
             .size = color_data_bytes.len,
             .usage = wgpu.BufferUsages.vertex | wgpu.BufferUsages.copy_dst,
             .mapped_at_creation = @as(u32, @intFromBool(false)),
-        }).?;
+        }) orelse return WgpuError.createBuffer;
         defer color_buffer.release();
 
         const total_index_data_len = triangles.indices.items.len * @sizeOf(u32);
@@ -487,7 +507,7 @@ pub const WgpuRender = struct {
             .size = total_index_data_len,
             .usage = wgpu.BufferUsages.index | wgpu.BufferUsages.copy_dst,
             .mapped_at_creation = @as(u32, @intFromBool(false)),
-        }).?;
+        }) orelse return WgpuError.createBuffer;
         defer index_buffer.release();
 
         self.queue.writeBuffer(position_buffer, 0, position_data_bytes.ptr, position_data_bytes.len);
@@ -504,35 +524,90 @@ pub const WgpuRender = struct {
         const output_bytes_per_row = (unaligned_bytes_per_row + alignment - 1) & ~(alignment - 1);
         const output_size = output_bytes_per_row * output_extent.height;
 
-        const target_texture = self.device.createTexture(&wgpu.TextureDescriptor{
-            .label = wgpu.StringView.fromSlice("Render texture"),
-            .size = output_extent,
-            .format = swap_chain_format,
-            .usage = wgpu.TextureUsages.render_attachment | wgpu.TextureUsages.copy_src,
-        }).?;
-        defer target_texture.release();
+        var render_texture: *wgpu.Texture = undefined;
+        var render_texture_view: *wgpu.TextureView = undefined;
+        var resolve_texture: *wgpu.Texture = undefined;
+        var resolve_texture_view: *wgpu.TextureView = undefined;
+        var texture_to_copy_from: *wgpu.Texture = undefined;
+        var store_op: wgpu.StoreOp = undefined;
 
-        const target_texture_view = target_texture.createView(&wgpu.TextureViewDescriptor{
-            .label = wgpu.StringView.fromSlice("Render texture view"),
-            .mip_level_count = 1,
-            .array_layer_count = 1,
-        }).?;
-        defer target_texture_view.release();
+        if (anti_aliased) {
+            render_texture = self.device.createTexture(&wgpu.TextureDescriptor{
+                .label = wgpu.StringView.fromSlice("MSAA render texture"),
+                .size = output_extent,
+                .format = swap_chain_format,
+                .usage = wgpu.TextureUsages.render_attachment,
+                .sample_count = 4,
+            }) orelse return WgpuError.createTexture;
+            errdefer render_texture.release();
+
+            render_texture_view = render_texture.createView(&wgpu.TextureViewDescriptor{
+                .label = wgpu.StringView.fromSlice("MSAA render texture view"),
+                .mip_level_count = 1,
+                .array_layer_count = 1,
+            }) orelse return WgpuError.createView;
+            errdefer render_texture_view.release();
+
+            resolve_texture = self.device.createTexture(&wgpu.TextureDescriptor{
+                .label = wgpu.StringView.fromSlice("Render resolve texture"),
+                .size = output_extent,
+                .format = swap_chain_format,
+                .usage = wgpu.TextureUsages.render_attachment | wgpu.TextureUsages.copy_src,
+                .sample_count = 1,
+            }) orelse return WgpuError.createTexture;
+            errdefer resolve_texture.release();
+
+            resolve_texture_view = resolve_texture.createView(&wgpu.TextureViewDescriptor{
+                .label = wgpu.StringView.fromSlice("Render resolve texture view"),
+                .mip_level_count = 1,
+                .array_layer_count = 1,
+            }) orelse return WgpuError.createView;
+            errdefer resolve_texture_view.?.release();
+
+            texture_to_copy_from = resolve_texture;
+            store_op = wgpu.StoreOp.discard;
+        } else {
+            render_texture = self.device.createTexture(&wgpu.TextureDescriptor{
+                .label = wgpu.StringView.fromSlice("Render texture (no MSAA)"),
+                .size = output_extent,
+                .format = swap_chain_format,
+                .usage = wgpu.TextureUsages.render_attachment | wgpu.TextureUsages.copy_src,
+                .sample_count = 1,
+            }) orelse return WgpuError.createTexture;
+            errdefer render_texture.release();
+
+            render_texture_view = render_texture.createView(&wgpu.TextureViewDescriptor{
+                .label = wgpu.StringView.fromSlice("Render texture view (no MSAA)"),
+                .mip_level_count = 1,
+                .array_layer_count = 1,
+            }) orelse return WgpuError.createView;
+            errdefer render_texture_view.release();
+            resolve_texture_view = undefined;
+            texture_to_copy_from = render_texture;
+            store_op = wgpu.StoreOp.store;
+        }
+        defer if (anti_aliased) {
+            resolve_texture_view.release();
+            resolve_texture.release();
+            render_texture_view.release();
+            render_texture.release();
+        } else {
+            render_texture_view.release();
+            render_texture.release();
+        };
 
         const gpu_output_buffer = self.device.createBuffer(&wgpu.BufferDescriptor{
             .label = wgpu.StringView.fromSlice("staging_buffer"),
             .usage = wgpu.BufferUsages.map_read | wgpu.BufferUsages.copy_dst,
             .size = output_size,
             .mapped_at_creation = @as(u32, @intFromBool(false)),
-        }).?;
+        }) orelse return WgpuError.createBuffer;
         defer gpu_output_buffer.release();
 
-        // Update and write the uniform buffer with current screen dimensions
         const screen_size = [2]f32{ @as(f32, @floatFromInt(sfc.getWidth())), @as(f32, @floatFromInt(sfc.getHeight())) };
         const screen_size_bytes = std.mem.sliceAsBytes(&screen_size);
         self.queue.writeBuffer(self.screen_size_buffer, 0, screen_size_bytes.ptr, screen_size_bytes.len);
 
-        // Create a new bind group with the updated uniform buffer
         const bindgroup_entries: []const wgpu.BindGroupEntry = &.{
             wgpu.BindGroupEntry{
                 .binding = 0,
@@ -546,25 +621,25 @@ pub const WgpuRender = struct {
             .layout = self.bind_group_layout,
             .entry_count = bindgroup_entries.len,
             .entries = bindgroup_entries.ptr,
-        }).?;
+        }) orelse return WgpuError.createBindgroup;
         defer bind_group.release();
 
-        // Begin command encoder and render pass once for all layers
         const encoder = self.device.createCommandEncoder(&wgpu.CommandEncoderDescriptor{
             .label = wgpu.StringView.fromSlice("Command Encoder"),
-        }).?;
+        }) orelse return WgpuError.createCommandEncoder;
         defer encoder.release();
 
         const color_attachments = &[_]wgpu.ColorAttachment{wgpu.ColorAttachment{
-            .view = target_texture_view,
+            .view = render_texture_view,
+            .resolve_target = resolve_texture_view,
             .clear_value = wgpu.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .load_op = wgpu.LoadOp.clear, // Clear the texture at the start of the pass
-            .store_op = wgpu.StoreOp.store,
+            .load_op = wgpu.LoadOp.clear,
+            .store_op = store_op,
         }};
         const render_pass = encoder.beginRenderPass(&wgpu.RenderPassDescriptor{
             .color_attachment_count = color_attachments.len,
             .color_attachments = color_attachments.ptr,
-        }).?;
+        }) orelse return WgpuError.beginRenderPass;
         defer render_pass.release();
 
         render_pass.setPipeline(self.pipeline);
@@ -595,7 +670,7 @@ pub const WgpuRender = struct {
 
         const img_copy_src = wgpu.TexelCopyTextureInfo{
             .origin = wgpu.Origin3D{},
-            .texture = target_texture,
+            .texture = texture_to_copy_from,
         };
         const img_copy_dst = wgpu.TexelCopyBufferInfo{
             .layout = wgpu.TexelCopyBufferLayout{
@@ -609,7 +684,7 @@ pub const WgpuRender = struct {
 
         const command_buffer = encoder.finish(&wgpu.CommandBufferDescriptor{
             .label = wgpu.StringView.fromSlice("Command Buffer"),
-        }).?;
+        }) orelse return WgpuError.encoderFinish;
         defer command_buffer.release();
 
         self.queue.submit(&[_]*const wgpu.CommandBuffer{command_buffer});
@@ -648,14 +723,6 @@ pub const WgpuRender = struct {
         const complete: *bool = @ptrCast(@alignCast(userdata1));
         complete.* = true;
     }
-    fn u8tof32(k: [4]u8) [4]f32 {
-        return .{
-            @as(f32, @floatFromInt(k[0])) / 255.0,
-            @as(f32, @floatFromInt(k[1])) / 255.0,
-            @as(f32, @floatFromInt(k[2])) / 255.0,
-            @as(f32, @floatFromInt(k[3])) / 255.0,
-        };
-    }
 };
 
 fn debug_log(comptime fmt: anytype, arg: anytype) void {
@@ -663,3 +730,6 @@ fn debug_log(comptime fmt: anytype, arg: anytype) void {
         std.log.warn(fmt, arg);
     }
 }
+
+// SPDX-License-Identifier: MPL-2.0
+//    Copyright © 2024-2025 Chris Marchesi, nat3

@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: MPL-2.0
-//   Copyright © 2024-2025 Chris Marchesi
-
 //! A polygon plotter for fill operations.
 const std = @import("std");
 const debug = @import("std").debug;
@@ -92,3 +89,6 @@ const WgpuSplinePlotterCtx = struct {
         };
     }
 };
+
+// SPDX-License-Identifier: MPL-2.0
+//   Copyright © 2024-2025 Chris Marchesi
