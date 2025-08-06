@@ -715,7 +715,7 @@ pub const WgpuRender = struct {
             for (0..view_width) |w| {
                 const px = z2d.Pixel{ .rgba = row_pixels[w] };
                 const og_px = sfc.getPixel(@intCast(w), @intCast(h)).?;
-                sfc.putPixel(@intCast(w), @intCast(h), compositor.runPixel(.float, px, og_px, .src_over));
+                sfc.putPixel(@intCast(w), @intCast(h), compositor.runPixel(.float, px, og_px, .dst_over));
             }
         }
     }

@@ -75,7 +75,7 @@ fn clear(sfc: *z2d.Surface) void {
     const height: usize = @intCast(sfc.getHeight());
     for (0..width) |w| {
         for (0..height) |h| {
-            sfc.putPixel(@intCast(w), @intCast(h), z2d.Pixel.fromColor(.{ .rgba = .{ 0, 0, 0, 0 } }));
+            sfc.putPixel(@intCast(w), @intCast(h), z2d.Pixel.fromColor(.{ .rgba = .{ 1, 0, 1, 1 } }));
         }
     }
 }
@@ -98,6 +98,7 @@ fn benchmark(alloc: std.mem.Allocator, size: i32, comptime runs: usize) !struct 
     std.fs.cwd().makeDir("benchmark/output") catch {};
     const workloops = 8;
     for (0..runs) |run| {
+        clear(&sf);
         var cpu_ctx = CpuContext.init(alloc, &sf);
         defer cpu_ctx.deinit();
         timer.reset();
@@ -113,7 +114,6 @@ fn benchmark(alloc: std.mem.Allocator, size: i32, comptime runs: usize) !struct 
         try gpu_ctx.finalize();
         gpu_times[run] = timer.read();
         try z2d.png_exporter.writeToPNGFile(sf, "benchmark/output/bench-gpu.png", .{});
-        clear(&sf);
     }
     var sum: u64 = undefined;
 
