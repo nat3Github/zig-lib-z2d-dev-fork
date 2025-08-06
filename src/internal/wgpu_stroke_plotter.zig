@@ -6,7 +6,7 @@ const math = @import("std").math;
 const mem = @import("std").mem;
 const testing = @import("std").testing;
 
-const dashed_plotter = @import("dashed_plotter.zig");
+const dashed_plotter = @import("wgpu_dashed_plotter.zig");
 const nodepkg = @import("path_nodes.zig");
 const options = @import("../options.zig");
 
@@ -42,7 +42,7 @@ pub fn plot(
     opts: PlotterOptions,
 ) Error!WgpuPolygon {
     if (Dasher.validate(opts.dashes)) {
-        unreachable;
+        return dashed_plotter.plot(alloc, nodes, opts);
     }
 
     var plotter = try Plotter.init(alloc, &opts);

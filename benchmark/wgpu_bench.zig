@@ -2,6 +2,51 @@ const std = @import("std");
 const z2d = @import("z2d");
 
 //TODO: build script bench output etc fix dashed lines
+fn dashed(alloc: std.mem.Allocator, size: i32) !void {
+    var gpu_rgen = std.Random.DefaultPrng.init(2342039854032);
+    var ran = gpu_rgen.random();
+    var sf = try z2d.Surface.init(.image_surface_rgba, alloc, size, size);
+    defer sf.deinit(alloc);
+
+    std.fs.cwd().makeDir("benchmark/output") catch {};
+    var ctx = try GpuContext.init(alloc, &sf, .default);
+    defer ctx.deinit();
+
+    const r = ran.float(f32);
+    const g = ran.float(f32);
+    const b = ran.float(f32);
+    const lw = ran.float(f64) * 10.0 + 1;
+    const cap_mode = ran.enumValue(z2d.options.CapMode);
+    const join_mode = ran.enumValue(z2d.options.JoinMode);
+    const dc = 10.0;
+    const do = 2.0;
+    const d1 = ran.float(f64) * dc + do;
+    const d2 = ran.float(f64) * dc + do;
+    const d3 = ran.float(f64) * dc + do;
+    const d4 = ran.float(f64) * dc + do;
+
+    ctx.setDashes(&.{ d1, d2, d3, d4 });
+
+    const px = z2d.Pixel.fromColor(.{ .rgba = .{ r, g, b, 0.5 } });
+    ctx.setSourceToPixel(px);
+    ctx.setLineWidth(lw);
+    ctx.setLineCapMode(cap_mode);
+    ctx.setLineJoinMode(join_mode);
+
+    const extent: f64 = @floatFromInt(ctx.surface.getWidth());
+    for (0..3) |_| {
+        const x = ran.float(f64) * extent;
+        const y = ran.float(f64) * extent;
+        try ctx.lineTo(x, y);
+    }
+    try ctx.stroke();
+    ctx.resetPath();
+
+    try ctx.finalize();
+
+    try z2d.png_exporter.writeToPNGFile(sf, "benchmark/output/dashed.png", .{});
+    clear(&sf);
+}
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
@@ -12,6 +57,7 @@ pub fn main() !void {
         600,
         1200,
     };
+    if (true) try dashed(gpa.allocator(), 600);
     std.debug.print("benchmark:\ncomparing cpu based rendering to gpu rendering\nequal fixed random seed\nmeasurements are averaged over {d} runs\nkeep in mind the results are hardware and driver dependent!\n", .{runs});
     for (extents) |ext| {
         const run = try benchmark(gpa.allocator(), ext, runs);
@@ -90,6 +136,14 @@ fn perf_test(ctx: anytype, ran: *std.Random) !void {
     const lw = ran.float(f64) * 10.0 + 1;
     const cap_mode = ran.enumValue(z2d.options.CapMode);
     const join_mode = ran.enumValue(z2d.options.JoinMode);
+    const dc = 10.0;
+    const do = 2.0;
+    const d1 = ran.float(f64) * dc + do;
+    const d2 = ran.float(f64) * dc + do;
+    const d3 = ran.float(f64) * dc + do;
+    const d4 = ran.float(f64) * dc + do;
+
+    ctx.setDashes(&.{ d1, d2, d3, d4 });
 
     const px = z2d.Pixel.fromColor(.{ .rgba = .{ r, g, b, 0.5 } });
     // ctx.setSourceToPixel(.{ .rgba = .fromClamped(1, 1, 1, 0.5) });
