@@ -31,7 +31,7 @@ const PointF32 = WgpuPolygon.PointF32;
 const fill_plotter = @import("internal/wgpu_fill_plotter.zig");
 const stroke_plotter = @import("internal/wgpu_stroke_plotter.zig");
 
-const debug_logging = true;
+const debug_logging = false;
 
 pub const Painter = struct {
     alloc: mem.Allocator,
@@ -719,7 +719,7 @@ pub const WgpuRender = struct {
         }
     }
     fn handleBufferMap(status: wgpu.MapAsyncStatus, _: wgpu.StringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.C) void {
-        std.log.info("buffer_map status={x:.8}\n", .{@intFromEnum(status)});
+        debug_log("buffer_map status={x:.8}\n", .{@intFromEnum(status)});
         const complete: *bool = @ptrCast(@alignCast(userdata1));
         complete.* = true;
     }
