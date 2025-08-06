@@ -71,3 +71,6 @@ pub fn first_current_point(self: *@This()) ?Point {
 pub fn current_contour_len(self: *@This()) usize {
     return self.points.items.len - self.current_contour_start_idx;
 }
+
+// SPDX-License-Identifier: MPL-2.0
+//   Copyright © 2024-2025 Chris Marchesi

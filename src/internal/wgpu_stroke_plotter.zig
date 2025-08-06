@@ -1,4 +1,3 @@
-// stroke_plotter.zig (modified stroke plotter)
 const std = @import("std");
 const debug = @import("std").debug;
 const math = @import("std").math;
@@ -434,7 +433,6 @@ pub fn plotClosedJoined(
     try self.result_polygon.finalize_current_contour();
 
     try self.result_polygon.finalize_current_contour();
-    // REVERSE THE INNER CONTOUR POINTS TO ENSURE OPPOSITE WINDING
     for (0..self.current_inner_segment_points.items.len) |k| {
         try self.result_polygon.append_point(self.current_inner_segment_points.items[self.current_inner_segment_points.items.len - 1 - k]);
     }
