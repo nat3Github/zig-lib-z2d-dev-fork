@@ -7,6 +7,7 @@
     .minimum_zig_version = "0.14.0",
     .paths = .{
         "build.zig",
+        "benchmark",
         "build.zig.zon",
         "src",
     },
@@ -15,7 +16,8 @@
             .path = "../wgpu-native",
         },
         .libtess = .{
-            .path = "../libtess",
+            .url = "git+https://github.com/nat3Github/zig-lib-libtess2#90f5fa94792c6f6ec0819025ba92f0ac0e2746e7",
+            .hash = "libtess-0.0.0-AhgMkCLNAgBtz3G5UJZbgnPXJlY9Ab0SutUYtvgedgMD",
         },
     },
 }

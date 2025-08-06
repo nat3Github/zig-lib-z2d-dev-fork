@@ -136,14 +136,14 @@ fn perf_test(ctx: anytype, ran: *std.Random) !void {
     const lw = ran.float(f64) * 10.0 + 1;
     const cap_mode = ran.enumValue(z2d.options.CapMode);
     const join_mode = ran.enumValue(z2d.options.JoinMode);
-    const dc = 10.0;
-    const do = 2.0;
-    const d1 = ran.float(f64) * dc + do;
-    const d2 = ran.float(f64) * dc + do;
-    const d3 = ran.float(f64) * dc + do;
-    const d4 = ran.float(f64) * dc + do;
+    // const dc = 10.0;
+    // const do = 2.0;
+    // const d1 = ran.float(f64) * dc + do;
+    // const d2 = ran.float(f64) * dc + do;
+    // const d3 = ran.float(f64) * dc + do;
+    // const d4 = ran.float(f64) * dc + do;
 
-    ctx.setDashes(&.{ d1, d2, d3, d4 });
+    // ctx.setDashes(&.{ d1, d2, d3, d4 });
 
     const px = z2d.Pixel.fromColor(.{ .rgba = .{ r, g, b, 0.5 } });
     // ctx.setSourceToPixel(.{ .rgba = .fromClamped(1, 1, 1, 0.5) });

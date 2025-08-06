@@ -1,3 +1,35 @@
+# z2d-wgpu
+
+- this branch is a modified version of z2d which implements gpu rendering
+- its not 100% API compatible but very close
+- main difference is you use ContextWgpu instead of Context and call finalize() when you are finished
+- uses web gpu as graphics driver and the rust wgpu-native implementation
+
+# depends on
+
+- a lot of stuff from z2d!
+- wgpu-native-zig
+- libtess2 (c library)
+
+# Benchmark / Performance
+
+- note: dashed lines are pretty slow
+- most gains are with big areas
+
+zig build benchmark
+
+on a macbook m1:
+
+> nat3@MacBookPro z2d % zig build benchmark --release=fast
+> benchmark:
+> comparing cpu based rendering to gpu rendering
+> equal fixed random seed
+> measurements are averaged over 1 runs
+> keep in mind the results are hardware and driver dependent!
+> extent 300x300, cpu: 8.213 ms gpu: 1.69 ms
+> extent 600x600, cpu: 19.090 ms gpu: 2.38 ms
+> extent 1200x1200, cpu: 67.734 ms gpu: 5.97 ms
+
 # z2d
 
 A 2D graphics library, written in pure Zig.
@@ -147,31 +179,31 @@ can be worked with at the lower level.
 
 Currently:
 
- * Basic rendering of lines and cubic Beziers, with helpers for arcs (circles
-   native, ellipses through transformations).
- * Filling and stroking:
-   - Miter, bevel, and round join supported for stroking.
-   - Butt, square, and round caps supported for stroking.
-   - Dashed lines supported along with offsets for tweaking alignment of
-     patterns to shapes, and zero-length dash stops to draw dotted lines.
- * Transformations: rotate, scale, translate, and other operations via direct
-   manipulations of the affine matrix.
- * Composition:
-   - Single pixel sources and linear, radial, and conic gradients supported.
-     Access to lower-level compositor primitives is supplied to allow for
-     manipulation of surfaces outside of higher-level drawing operations.
-   - 28 compositor operators supported across the set of Porter-Duff and PDF
-     blend modes.
- * Pixel formats:
-   - RGBA, RGB, and alpha-only in 8, 4, 2, and 1-bit formats.
- * Color spaces:
-   - Linear, sRGB, and HSL currently supported for specifying high-level color.
-     Interpolation supported in all color spaces. More color spaces are planed.
- * Exporting:
-   - Rudimentary PNG export supported; alpha-channel formats export to
-     greyscale.
-   - Support for explicitly specifying output RGB profile to assist with proper
-     color management.
+- Basic rendering of lines and cubic Beziers, with helpers for arcs (circles
+  native, ellipses through transformations).
+- Filling and stroking:
+  - Miter, bevel, and round join supported for stroking.
+  - Butt, square, and round caps supported for stroking.
+  - Dashed lines supported along with offsets for tweaking alignment of
+    patterns to shapes, and zero-length dash stops to draw dotted lines.
+- Transformations: rotate, scale, translate, and other operations via direct
+  manipulations of the affine matrix.
+- Composition:
+  - Single pixel sources and linear, radial, and conic gradients supported.
+    Access to lower-level compositor primitives is supplied to allow for
+    manipulation of surfaces outside of higher-level drawing operations.
+  - 28 compositor operators supported across the set of Porter-Duff and PDF
+    blend modes.
+- Pixel formats:
+  - RGBA, RGB, and alpha-only in 8, 4, 2, and 1-bit formats.
+- Color spaces:
+  - Linear, sRGB, and HSL currently supported for specifying high-level color.
+    Interpolation supported in all color spaces. More color spaces are planed.
+- Exporting:
+  - Rudimentary PNG export supported; alpha-channel formats export to
+    greyscale.
+  - Support for explicitly specifying output RGB profile to assist with proper
+    color management.
 
 The current plan is to work towards writing a reasonably feature-complete SVG
 renderer, with the ability to utilize the same primitives to perform other
@@ -190,7 +222,7 @@ View the documentation for the latest release at:
 
 See the [`spec/`](spec/) directory for a number of rudimentary usage examples.
 
-## LICENSE and acknowledgments 
+## LICENSE and acknowledgments
 
 z2d itself is licensed MPL 2.0; see the LICENSE file for further details.
 
