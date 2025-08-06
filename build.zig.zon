@@ -12,12 +12,13 @@
         "src",
     },
     .dependencies = .{
-        .wgpu_native_zig = .{
-            .path = "../wgpu-native",
-        },
         .libtess = .{
             .url = "git+https://github.com/nat3Github/zig-lib-libtess2#90f5fa94792c6f6ec0819025ba92f0ac0e2746e7",
             .hash = "libtess-0.0.0-AhgMkCLNAgBtz3G5UJZbgnPXJlY9Ab0SutUYtvgedgMD",
+        },
+        .wgpu_native_zig = .{
+            .url = "git+https://github.com/nat3Github/zig-lib-wgpu-native-dev-fork#d647c537fef9dbb691d21aba5ff106b6baf3f78e",
+            .hash = "wgpu_native_zig-6.5.0-B9jeDCBzAwAAhQ2tu-X8IdjKCrwsZcMlb6_mnXIJcll3",
         },
     },
 }
