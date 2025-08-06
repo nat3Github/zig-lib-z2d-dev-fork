@@ -1,5 +1,4 @@
-// stroke_plotter.zig
-
+// stroke_plotter.zig (modified stroke plotter)
 const std = @import("std");
 const debug = @import("std").debug;
 const math = @import("std").math;
@@ -262,48 +261,6 @@ const CapPlotterCtx = struct {
     }
 };
 
-const WgpuJoiner = struct {
-    const Self = @This();
-    plotter: *Plotter,
-
-    plot_fn: *const fn (
-        *const @This(),
-        *?mem.Allocator.Error,
-        Point,
-    ) void,
-
-    fn plot(
-        this: *const Self,
-        point: Point,
-    ) mem.Allocator.Error!void {
-        var err_: ?mem.Allocator.Error = null;
-        this.plot_fn(this, &err_, point);
-        if (err_) |err| return err;
-    }
-
-    fn plotOuter(
-        this: *const Self,
-        err_: *?mem.Allocator.Error,
-        point: Point,
-    ) void {
-        this.plotter.current_outer_segment_points.append(point) catch |err| {
-            err_.* = err;
-            return;
-        };
-    }
-
-    fn plotInner(
-        this: *const Self,
-        err_: *?mem.Allocator.Error,
-        point: Point,
-    ) void {
-        this.plotter.current_inner_segment_points.append(point) catch |err| {
-            err_.* = err;
-            return;
-        };
-    }
-};
-
 pub fn plotSingle(T: type, self: *T, start: Point, end: Point) Error!void {
     debug.assert(self.current_inner_segment_points.items.len == 0);
 
@@ -496,7 +453,47 @@ pub fn join(
     p1: Point,
     p2: Point,
 ) mem.Allocator.Error!void {
-    const Joiner = WgpuJoiner;
+    const Joiner = struct {
+        const Self = @This();
+        plotter: *T,
+
+        plot_fn: *const fn (
+            *const @This(),
+            *?mem.Allocator.Error,
+            Point,
+        ) void,
+
+        fn plot(
+            this: *const Self,
+            point: Point,
+        ) mem.Allocator.Error!void {
+            var err_: ?mem.Allocator.Error = null;
+            this.plot_fn(this, &err_, point);
+            if (err_) |err| return err;
+        }
+
+        fn plotOuter(
+            this: *const Self,
+            err_: *?mem.Allocator.Error,
+            point: Point,
+        ) void {
+            this.plotter.current_outer_segment_points.append(point) catch |err| {
+                err_.* = err;
+                return;
+            };
+        }
+
+        fn plotInner(
+            this: *const Self,
+            err_: *?mem.Allocator.Error,
+            point: Point,
+        ) void {
+            this.plotter.current_inner_segment_points.append(point) catch |err| {
+                err_.* = err;
+                return;
+            };
+        }
+    };
 
     if (p0.equal(p1) or p1.equal(p2)) {
         if (self.clockwise_ == null) self.clockwise_ = false;

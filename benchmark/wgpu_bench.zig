@@ -51,7 +51,7 @@ fn dashed(alloc: std.mem.Allocator, size: i32) !void {
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
-    const runs = 10;
+    const runs = 1;
     const extents: []const i32 = &.{
         300,
         600,
