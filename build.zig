@@ -14,9 +14,11 @@ pub fn docsStep(
     const dir = b.addInstallDirectory(.{
         .source_dir = b.addObject(.{
             .name = "z2d",
-            .root_source_file = b.path("src/z2d.zig"),
-            .target = target,
-            .optimize = .Debug,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/z2d.zig"),
+                .target = target,
+                .optimize = .Debug,
+            }),
         }).getEmittedDocs(),
         .install_dir = .prefix,
         .install_subdir = "docs",
@@ -154,8 +156,6 @@ pub fn build(b: *std.Build) void {
     ) orelse &[0][]const u8{};
     const test_step = b.addTest(.{
         .root_module = z2d,
-        .target = target,
-        .optimize = optimize,
         .filters = test_filters,
     });
     const test_run = b.addRunArtifact(test_step);
@@ -180,16 +180,20 @@ pub fn build(b: *std.Build) void {
         if (spec_update orelse false)
             break :spec b.addExecutable(.{
                 .name = "spec",
-                .root_source_file = b.path("spec/main.zig"),
-                .target = target,
-                .optimize = optimize,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("spec/main.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                }),
             })
         else
             break :spec b.addTest(.{
                 .name = "spec",
-                .root_source_file = b.path("spec/main.zig"),
-                .target = target,
-                .optimize = optimize,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("spec/main.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                }),
                 .filters = test_filters,
             });
     };
@@ -205,9 +209,11 @@ pub fn build(b: *std.Build) void {
     /////////////////////////////////////////////////////////////////////////
     const benchmark = b.addExecutable(.{
         .name = "benchmark",
-        .root_source_file = b.path("benchmark/wgpu_bench.zig"),
-        .optimize = optimize,
-        .target = target,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmark/wgpu_bench.zig"),
+            .optimize = optimize,
+            .target = target,
+        }),
     });
     benchmark.root_module.addImport("z2d", z2d);
     const benchmark_run = b.addRunArtifact(benchmark);

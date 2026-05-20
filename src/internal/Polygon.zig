@@ -250,7 +250,74 @@ pub fn xEdgesForY(
 /// polygon, or converted to a set of edges to be added to a larger
 /// polygon/edge collection.
 pub const Contour = struct {
-    pub const CornerList = std.DoublyLinkedList(Point);
+pub const CornerList = struct {
+    pub const Node = struct {
+        prev: ?*Node = null,
+        next: ?*Node = null,
+        data: Point,
+    };
+
+    first: ?*Node = null,
+    last: ?*Node = null,
+    len: usize = 0,
+
+    pub fn append(self: *CornerList, node: *Node) void {
+        node.next = null;
+        if (self.last) |last| {
+            last.next = node;
+            node.prev = last;
+            self.last = node;
+        } else {
+            self.first = node;
+            self.last = node;
+            node.prev = null;
+        }
+        self.len += 1;
+    }
+
+    pub fn prepend(self: *CornerList, node: *Node) void {
+        node.prev = null;
+        if (self.first) |first| {
+            first.prev = node;
+            node.next = first;
+            self.first = node;
+        } else {
+            self.first = node;
+            self.last = node;
+            node.next = null;
+        }
+        self.len += 1;
+    }
+
+    pub fn insertBefore(self: *CornerList, existing: *Node, new: *Node) void {
+        new.next = existing;
+        new.prev = existing.prev;
+        if (existing.prev) |prev| {
+            prev.next = new;
+        } else {
+            self.first = new;
+        }
+        existing.prev = new;
+        self.len += 1;
+    }
+
+    pub fn concatByMoving(self: *CornerList, other: *CornerList) void {
+        if (other.first) |other_first| {
+            if (self.last) |last| {
+                last.next = other_first;
+                other_first.prev = last;
+                self.last = other.last;
+            } else {
+                self.first = other_first;
+                self.last = other.last;
+            }
+            self.len += other.len;
+        }
+        other.first = null;
+        other.last = null;
+        other.len = 0;
+    }
+};
 
     corners: CornerList = .{},
     scale: f64,
